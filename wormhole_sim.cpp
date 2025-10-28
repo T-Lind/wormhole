@@ -797,16 +797,29 @@ int main(int argc, char** argv) {
     cout << "  - Objects will appear DISTORTED through the throat\n\n";
     
     if (interactive) {
-        cout << "Rendering (interactive)...\n";
+        cout << "Rendering (interactive)... Use -i command line flag to switch modes.\n";
         int frameCount = 0;
+        double lastTime = glfwGetTime();
+
         while (!glfwWindowShouldClose(engine.window)) {
             processInput(engine.window);
             engine.render();
-            if (++frameCount % 10 == 0) {
-                cout << "Frame " << frameCount << "\r" << flush;
+
+            // FPS Counter
+            frameCount++;
+            double currentTime = glfwGetTime();
+            double elapsedTime = currentTime - lastTime;
+            if (elapsedTime >= 1.0) {
+                double fps = double(frameCount) / elapsedTime;
+                std::stringstream ss;
+                ss << "Wormhole Simulation | " << spheres.size() << " Spheres, " << cubes.size() << " Cubes | FPS: " << std::fixed << std::setprecision(1) << fps;
+                glfwSetWindowTitle(engine.window, ss.str().c_str());
+                
+                frameCount = 0;
+                lastTime = currentTime;
             }
         }
-        cout << "\n\nSimulation ended. Total frames: " << frameCount << "\n";
+        cout << "\n\nSimulation ended.\n";
         glfwTerminate();
         return 0;
     }
