@@ -3,7 +3,6 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(binding = 0, rgba32f) uniform writeonly image2D destTex;
 
-// UBO for camera data
 layout(std140, binding = 0) uniform Camera {
     vec3 position;
     float pad1;
@@ -14,9 +13,6 @@ layout(std140, binding = 0) uniform Camera {
     float fov;
 } u_camera;
 
-// ============================================================================
-// STRUCTS
-// ============================================================================
 struct Sphere {
     vec4 centerAndRadius; // .xyz: center, .w: radius
     vec4 color;           // .xyz: color
@@ -59,7 +55,6 @@ uniform float time;
 const float THROAT_RADIUS = 15.0f;
 const vec3 THROAT_CENTER = vec3(0, 0, 0);
 
-// Procedural noise for sun surface
 float random(vec2 st) {
     return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
 }
@@ -97,12 +92,9 @@ struct HitInfo {
     float radius;
 };
 
-// ============================================================================
-// INTERSECTION TESTS
-// ============================================================================
 HitInfo intersectSphere(vec3 rayOrigin, vec3 rayDir, vec4 centerAndRadius, vec4 color, vec4 properties) {
     HitInfo hit;
-    hit.hit = false; // <-- CRITICAL FIX: Initialize hit to false
+    hit.hit = false;
     vec3 oc = rayOrigin - centerAndRadius.xyz;
     float a = dot(rayDir, rayDir);
     float b = 2.0 * dot(oc, rayDir);
@@ -117,7 +109,6 @@ HitInfo intersectSphere(vec3 rayOrigin, vec3 rayDir, vec4 centerAndRadius, vec4 
             hit.normal = normalize((rayOrigin + rayDir * t) - centerAndRadius.xyz);
             hit.color = color.rgb;
             hit.isEmissive = int(properties.x);
-            // Add these to make the struct complete for return
             hit.center = centerAndRadius.xyz;
             hit.radius = centerAndRadius.w;
         }
@@ -125,16 +116,13 @@ HitInfo intersectSphere(vec3 rayOrigin, vec3 rayDir, vec4 centerAndRadius, vec4 
     return hit;
 }
 
-// Ray-AABB (Cube) intersection - REMOVED as it's no longer used
-
-// Möller–Trumbore ray-triangle intersection algorithm
 bool intersectTriangle(vec3 rayOrigin, vec3 rayDir, Triangle tri, inout float t) {
     vec3 edge1 = tri.v1 - tri.v0;
     vec3 edge2 = tri.v2 - tri.v0;
     vec3 h = cross(rayDir, edge2);
     float a = dot(edge1, h);
 
-    if (a > -1e-6 && a < 1e-6) // Ray is parallel to the triangle
+    if (a > -1e-6 && a < 1e-6)
         return false;
 
     float f = 1.0 / a;
@@ -150,20 +138,18 @@ bool intersectTriangle(vec3 rayOrigin, vec3 rayDir, Triangle tri, inout float t)
     if (v < 0.0 || u + v > 1.0)
         return false;
 
-    // At this stage we can compute t to find out where the intersection point is on the line.
     float current_t = f * dot(edge2, q);
 
-    if (current_t > 1e-6) { // Ray intersection
+    if (current_t > 1e-6) {
         t = current_t;
         return true;
-    } else { // This means that there is a line intersection but not a ray intersection.
-        return false;
     }
+    return false;
 }
 
 HitInfo traceScene(vec3 origin, vec3 direction, int universe) {
     HitInfo closestHit;
-    closestHit.hit = false; // <-- CRITICAL FIX: Initialize hit to false
+    closestHit.hit = false;
     closestHit.distance = 1e10;
 
     for (int i = 0; i < numSpheres; ++i) {
@@ -176,7 +162,6 @@ HitInfo traceScene(vec3 origin, vec3 direction, int universe) {
         }
     }
     
-    // Check for OBJ triangles - we'll assume they are in universe 1 for now
     if (universe == 1) {
         for (int i = 0; i < numTriangles; ++i) {
             float t;
@@ -195,9 +180,6 @@ HitInfo traceScene(vec3 origin, vec3 direction, int universe) {
     return closestHit;
 }
 
-// ============================================================================
-// BACKGROUNDS
-// ============================================================================
 vec3 getStarfieldColor(vec3 direction) {
     vec3 color = vec3(0.0);
 
@@ -214,9 +196,6 @@ vec3 getStarfieldColor(vec3 direction) {
     return color;
 }
 
-// ============================================================================
-// MAIN RAYTRACING LOGIC
-// ============================================================================
 void main() {
     ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
     ivec2 dims = imageSize(destTex);
@@ -224,49 +203,36 @@ void main() {
         return;
     }
 
-    // Camera setup
     vec3 forward = normalize(u_camera.target - u_camera.position);
     vec3 right = normalize(cross(forward, u_camera.up));
     vec3 up = cross(right, forward);
     float aspect = float(dims.x) / float(dims.y);
     float tanHalfFov = tan(radians(u_camera.fov) * 0.5);
 
-    // Get ray direction
     float u = (2.0 * (pixel_coords.x + 0.5) / dims.x - 1.0) * aspect * tanHalfFov;
     float v = (1.0 - 2.0 * (pixel_coords.y + 0.5) / dims.y) * tanHalfFov;
     vec3 rayDir = normalize(u * right + v * up + forward);
 
-    // Simplified Wormhole intersection (just a sphere test)
-    float t_throat;
-    vec3 throat_normal; // unused
-    Sphere throat_sphere = Sphere(vec4(THROAT_CENTER, THROAT_RADIUS), vec4(0), vec4(0, 0, 0, 0)); // universeID is 0 for throat
+    Sphere throat_sphere = Sphere(vec4(THROAT_CENTER, THROAT_RADIUS), vec4(0), vec4(0, 0, 0, 0));
     HitInfo hitsThroat = intersectSphere(u_camera.position, rayDir, throat_sphere.centerAndRadius, throat_sphere.color, throat_sphere.properties);
 
     HitInfo sceneHit = traceScene(u_camera.position, rayDir, currentUniverse);
 
     vec3 final_color;
 
-    // Case 1: Hit local object
     if (sceneHit.hit && (!hitsThroat.hit || sceneHit.distance < hitsThroat.distance)) {
-        // If the hit object is emissive, render a procedural sun
         if (sceneHit.isEmissive == 1) {
             vec3 hitPoint = u_camera.position + rayDir * sceneHit.distance;
-            
-            // Get surface coordinates for procedural texture
             vec3 localPos = hitPoint - sceneHit.center;
             vec2 uv = vec2(atan(localPos.z, localPos.x) / (2.0 * 3.14159), acos(localPos.y / sceneHit.radius) / 3.14159);
             
-            // Procedural sun surface
-            float sun_noise = fbm(uv * 10.0 + vec2(0.1,0.1) /* adding a small offset to avoid artifacts */ );
-            vec3 sun_color = sceneHit.color * (0.8 + sun_noise * 0.4);
-            
-            final_color = sun_color;
+            float sun_noise = fbm(uv * 10.0 + vec2(time * 0.1, time * 0.05));
+            final_color = sceneHit.color * (0.8 + sun_noise * 0.4);
 
         } else {
             vec3 hitPoint = u_camera.position + rayDir * sceneHit.distance;
             vec3 viewDir = -rayDir;
             
-            // LIGHTING: Light direction is now from the sun in the current universe
             vec3 sunPos = (currentUniverse == 1) ? sunPosU1 : sunPosU2;
             vec3 lightDir = normalize(sunPos - hitPoint);
             
@@ -279,7 +245,6 @@ void main() {
             final_color = sceneHit.color * (ambient + diffuse * 0.7) + sunColor * spec;
         }
     }
-    // Case 2: Hit wormhole
     else if (hitsThroat.hit) {
         vec3 P_in = u_camera.position + rayDir * hitsThroat.distance;
         vec3 hit_normal = normalize(P_in - THROAT_CENTER);
@@ -294,21 +259,16 @@ void main() {
 
         vec3 remote_color;
         if (otherSceneHit.hit) {
-            // If hit object is emissive (a sun)
             if (otherSceneHit.isEmissive == 1) {
                  vec3 hitPoint = new_origin + refracted_dir * otherSceneHit.distance;
                  vec3 localPos = hitPoint - otherSceneHit.center;
                  vec2 uv = vec2(atan(localPos.z, localPos.x) / (2.0 * 3.14159), acos(localPos.y / otherSceneHit.radius) / 3.14159);
-                 // Procedural sun surface (for remote sun)
-                 float sun_noise = fbm(uv * 10.0 + vec2(0.1,0.1));
-                 vec3 sun_color = otherSceneHit.color * (0.8 + sun_noise * 0.4);
-                 
-                 remote_color = sun_color;
+                 float sun_noise = fbm(uv * 10.0 + vec2(time * 0.1, time * 0.05));
+                 remote_color = otherSceneHit.color * (0.8 + sun_noise * 0.4);
             } else {
                 vec3 hitPoint = new_origin + refracted_dir * otherSceneHit.distance;
                 vec3 viewDir = -refracted_dir;
                 
-                // LIGHTING: Light direction is now from the sun in the OTHER universe
                 vec3 sunPos = (otherUniverse == 1) ? sunPosU1 : sunPosU2;
                 vec3 lightDir = normalize(sunPos - hitPoint);
                 
@@ -324,7 +284,6 @@ void main() {
         
         final_color = mix(remote_color, vec3(0.5, 0.8, 1.0), fresnel * 0.8);
     }
-    // Case 3: Hit background
     else {
         final_color = getStarfieldColor(rayDir);
     }

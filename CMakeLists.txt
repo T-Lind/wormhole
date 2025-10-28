@@ -1,42 +1,35 @@
 cmake_minimum_required(VERSION 3.10)
 
-# Set the vcpkg toolchain file BEFORE the project() command.
-# This is the most robust method.
 if(NOT CMAKE_TOOLCHAIN_FILE)
     set(CMAKE_TOOLCHAIN_FILE ${CMAKE_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake CACHE STRING "Vcpkg toolchain file")
 endif()
 
 project(WormholeSim)
 
-# Statically link the Visual C++ runtime library for easy distribution
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()
 
-# Set the C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Dependencies
 find_package(GLEW REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(OpenGL REQUIRED)
 
-# Common dependencies
 set(DEPS glfw GLEW::GLEW glm::glm OpenGL::GL)
 
-# Wormhole Simulation executable (new)
 add_executable(WormholeSim wormhole_sim.cpp)
 target_link_libraries(WormholeSim PRIVATE ${DEPS})
 target_include_directories(WormholeSim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 add_custom_command(TARGET WormholeSim POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_CURRENT_SOURCE_DIR}/camera_path.txt
             $<TARGET_FILE_DIR:WormholeSim>
 )
 
-# Enable OpenMP for parallel rendering
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
     target_link_libraries(WormholeSim PRIVATE OpenMP::OpenMP_CXX)
@@ -45,18 +38,9 @@ else()
     message(WARNING "OpenMP not found - rendering will be slower")
 endif()
 
-# Shader files (copy to output dir)
-file(GLOB SHADERS
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.vert"
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.frag"
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.comp"
+add_custom_command(TARGET WormholeSim POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/wormhole.comp
+            $<TARGET_FILE_DIR:WormholeSim>
 )
-
-foreach(shader ${SHADERS})
-    add_custom_command(TARGET WormholeSim POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${shader}
-        $<TARGET_FILE_DIR:WormholeSim>
-    )
-endforeach()
 
