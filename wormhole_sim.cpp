@@ -7,6 +7,12 @@
 #include <iostream>
 #include <cmath>
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <filesystem>
+#include <thread>
+#include <chrono>
+#include <iomanip>
 #define _USE_MATH_DEFINES
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -20,6 +26,7 @@ using namespace std;
 // ============================================================================
 const int WIDTH = 800;
 const int HEIGHT = 600;
+const int MOVIE_FPS = 24;
 
 // Wormhole parameters
 const float THROAT_RADIUS = 15.0f;  // Wormhole throat radius (b0)
@@ -499,59 +506,54 @@ struct Engine {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     }
     
-    void render() {
+    void computePixels() {
         // Build camera basis
         vec3 forward = normalize(camera.target - camera.position);
         vec3 right = normalize(cross(forward, camera.up));
         vec3 up = cross(right, forward);
-        
+
         float aspect = float(WIDTH) / float(HEIGHT);
         float tanHalfFov = tan(radians(camera.fov) * 0.5f);
-        
+
         // Ray trace each pixel (parallelized for speed!)
         #pragma omp parallel for schedule(dynamic, 4)
         for (int y = 0; y < HEIGHT; y++) {
             for (int x = 0; x < WIDTH; x++) {
-                
                 vec3 final_color(0.0f);
                 const int samples = 2; // 2x2 Supersampling Anti-Aliasing
-
                 for (int i = 0; i < samples; i++) {
                     for (int j = 0; j < samples; j++) {
-                        // Calculate sub-pixel offsets for SSAA
                         float offX = (float(i) + 0.5f) / float(samples);
                         float offY = (float(j) + 0.5f) / float(samples);
-
-                        // Calculate ray direction for this sub-pixel
                         float u = (2.0f * (x + offX) / WIDTH - 1.0f) * aspect * tanHalfFov;
                         float v = (1.0f - 2.0f * (y + offY) / HEIGHT) * tanHalfFov;
-                        
                         vec3 rayDir = normalize(u * right + v * up + forward);
                         final_color += traceRay(camera.position, rayDir);
                     }
                 }
-                final_color /= (float)(samples * samples); // Average the colors
-
-                // Write to pixel buffer
+                final_color /= (float)(samples * samples);
                 int idx = (y * WIDTH + x) * 3;
                 pixels[idx + 0] = (unsigned char)(glm::clamp(final_color.r, 0.0f, 1.0f) * 255);
                 pixels[idx + 1] = (unsigned char)(glm::clamp(final_color.g, 0.0f, 1.0f) * 255);
                 pixels[idx + 2] = (unsigned char)(glm::clamp(final_color.b, 0.0f, 1.0f) * 255);
             }
         }
-        
-        // Upload to GPU
+    }
+
+    void drawPixels() {
         glBindTexture(GL_TEXTURE_2D, texture);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, WIDTH, HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-        
-        // Draw fullscreen quad
         glClear(GL_COLOR_BUFFER_BIT);
         glUseProgram(shaderProgram);
         glBindVertexArray(quadVAO);
         glDrawArrays(GL_TRIANGLES, 0, 6);
-        
         glfwSwapBuffers(window);
         glfwPollEvents();
+    }
+
+    void render() {
+        computePixels();
+        drawPixels();
     }
 };
 
@@ -600,9 +602,66 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
 }
 
 // ============================================================================
+// MOVIE MODE SUPPORT
+// ============================================================================
+struct Keyframe {
+    float azimuthDeg;
+    float elevationDeg;
+    float radius;
+    float durationSec;
+};
+
+static bool loadCameraPath(const std::string& pathFile, std::vector<Keyframe>& out) {
+    std::ifstream in(pathFile);
+    if (!in.is_open()) return false;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        if (line[0] == '#') continue;
+        std::istringstream ss(line);
+        Keyframe k{};
+        if (!(ss >> k.azimuthDeg >> k.elevationDeg >> k.radius >> k.durationSec)) continue;
+        out.push_back(k);
+    }
+    return !out.empty();
+}
+
+static void setCameraSpherical(float azimuthDeg, float elevationDeg, float radius) {
+    camera.target = THROAT_CENTER;
+    camera.azimuth = radians(azimuthDeg);
+    camera.elevation = radians(elevationDeg);
+    camera.radius = radius;
+    camera.updatePosition();
+}
+
+static void writePPM(const std::string& filename, const std::vector<unsigned char>& buf, int w, int h) {
+    std::ofstream out(filename, std::ios::binary);
+    out << "P6\n" << w << " " << h << "\n255\n";
+    out.write(reinterpret_cast<const char*>(buf.data()), static_cast<std::streamsize>(w*h*3));
+}
+
+static bool readPPM(const std::string& filename, std::vector<unsigned char>& buf, int& w, int& h) {
+    std::ifstream in(filename, std::ios::binary);
+    if (!in) return false;
+    std::string magic; in >> magic; if (magic != "P6") return false;
+    char c = in.peek();
+    while (c == '#') { std::string comment; std::getline(in, comment); c = in.peek(); }
+    in >> w >> h; int maxv; in >> maxv; in.get();
+    if (maxv != 255) return false;
+    buf.resize(w*h*3);
+    in.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(w*h*3));
+    return true;
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
-int main() {
+int main(int argc, char** argv) {
+    bool interactive = false;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--interactive" || a == "-i") interactive = true;
+    }
     Engine engine;
     
     // Set up input callbacks
@@ -654,20 +713,68 @@ int main() {
     cout << "  - SMOOTH, high-quality rendering (due to anti-aliasing)\n";
     cout << "  - Objects will appear DISTORTED through the throat\n\n";
     
-    cout << "Rendering...\n";
-    
-    int frameCount = 0;
-    while (!glfwWindowShouldClose(engine.window)) {
-        processInput(engine.window);
-        engine.render();
-        
-        // Print progress every 10 frames
-        if (++frameCount % 10 == 0) {
-            cout << "Frame " << frameCount << "\r" << flush;
+    if (interactive) {
+        cout << "Rendering (interactive)...\n";
+        int frameCount = 0;
+        while (!glfwWindowShouldClose(engine.window)) {
+            processInput(engine.window);
+            engine.render();
+            if (++frameCount % 10 == 0) {
+                cout << "Frame " << frameCount << "\r" << flush;
+            }
+        }
+        cout << "\n\nSimulation ended. Total frames: " << frameCount << "\n";
+        glfwTerminate();
+        return 0;
+    }
+
+    // Movie mode (default): precompute frames, then play back
+    cout << "Movie mode: precomputing frames...\n";
+    std::vector<Keyframe> keys;
+    std::string pathFile = "camera_path.txt";
+    if (!loadCameraPath(pathFile, keys)) {
+        keys = { {0,60,200,2},{90,55,160,2},{180,50,120,2},{270,45,80,2},{360,40,50,2},{540,35,30,2} };
+        cout << "Warning: camera_path.txt not found. Using built-in path.\n";
+    }
+
+    std::filesystem::create_directories("exports");
+    std::vector<std::string> frameFiles;
+
+    int frameIndex = 0;
+    for (size_t k = 0; k + 1 < keys.size(); ++k) {
+        const Keyframe& a = keys[k];
+        const Keyframe& b = keys[k+1];
+        int frames = std::max(1, int(std::round(a.durationSec * MOVIE_FPS)));
+        for (int f = 0; f < frames; ++f) {
+            float t = (frames == 1) ? 1.0f : (float(f) / float(frames));
+            float az = glm::mix(a.azimuthDeg,   b.azimuthDeg,   t);
+            float el = glm::mix(a.elevationDeg, b.elevationDeg, t);
+            float rr = glm::mix(a.radius,       b.radius,       t);
+            setCameraSpherical(az, el, rr);
+            engine.computePixels();
+            std::ostringstream name;
+            name << "exports/frame_" << std::setw(5) << std::setfill('0') << frameIndex++ << ".ppm";
+            std::string file = name.str();
+            writePPM(file, engine.pixels, WIDTH, HEIGHT);
+            frameFiles.push_back(file);
+            if (frameIndex % 10 == 0) cout << "Saved " << frameIndex << " frames\r" << flush;
         }
     }
-    
-    cout << "\n\nSimulation ended. Total frames: " << frameCount << "\n";
+    cout << "\nPrecompute complete: " << frameIndex << " frames written to exports/.\n";
+
+    cout << "Playing back... (" << MOVIE_FPS << " FPS)\n";
+    glfwSetWindowTitle(engine.window, "Wormhole Simulation - Playback");
+    for (const auto& file : frameFiles) {
+        std::vector<unsigned char> buf;
+        int w=0,h=0;
+        if (!readPPM(file, buf, w, h)) continue;
+        if (w != WIDTH || h != HEIGHT) continue;
+        engine.pixels = std::move(buf);
+        engine.drawPixels();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000 / MOVIE_FPS));
+        if (glfwWindowShouldClose(engine.window)) break;
+    }
+
     glfwTerminate();
     return 0;
 }

@@ -13,20 +13,15 @@ find_package(OpenGL REQUIRED)
 # Common dependencies
 set(DEPS glfw GLEW::GLEW glm::glm OpenGL::GL)
 
-# 2D Lensing executable
-add_executable(Wormhole2D 2D_lensing.cpp)
-target_link_libraries(Wormhole2D PRIVATE ${DEPS})
-target_include_directories(Wormhole2D PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-# 3D Black Hole executable (legacy)
-add_executable(Wormhole3D wormhole.cpp)
-target_link_libraries(Wormhole3D PRIVATE ${DEPS})
-target_include_directories(Wormhole3D PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
 # Wormhole Simulation executable (new)
 add_executable(WormholeSim wormhole_sim.cpp)
 target_link_libraries(WormholeSim PRIVATE ${DEPS})
 target_include_directories(WormholeSim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_custom_command(TARGET WormholeSim POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/camera_path.txt
+            $<TARGET_FILE_DIR:WormholeSim>
+)
 
 # Enable OpenMP for parallel rendering
 find_package(OpenMP)
@@ -45,10 +40,10 @@ file(GLOB SHADERS
 )
 
 foreach(shader ${SHADERS})
-    add_custom_command(TARGET Wormhole3D POST_BUILD
+    add_custom_command(TARGET WormholeSim POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${shader}
-        $<TARGET_FILE_DIR:Wormhole3D>
+        $<TARGET_FILE_DIR:WormholeSim>
     )
 endforeach()
 
