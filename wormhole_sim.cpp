@@ -78,6 +78,46 @@ struct Camera {
 Camera camera;
 
 // ============================================================================
+// KEYBOARD INPUT
+// ============================================================================
+
+void processInput(GLFWwindow* window) {
+    float cameraSpeed = 2.5f;
+    vec3 forward = normalize(camera.target - camera.position);
+    vec3 right = normalize(cross(forward, camera.up));
+    vec3 localUp = cross(right, forward);
+
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+        camera.position += forward * cameraSpeed;
+        camera.target += forward * cameraSpeed;
+    }
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+        camera.position -= forward * cameraSpeed;
+        camera.target -= forward * cameraSpeed;
+    }
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+        camera.position -= right * cameraSpeed;
+        camera.target -= right * cameraSpeed;
+    }
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+        camera.position += right * cameraSpeed;
+        camera.target += right * cameraSpeed;
+    }
+
+    bool isShiftPressed = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+        if (isShiftPressed) {
+            camera.position -= localUp * cameraSpeed;
+            camera.target -= localUp * cameraSpeed;
+        } else {
+            camera.position += localUp * cameraSpeed;
+            camera.target += localUp * cameraSpeed;
+        }
+    }
+}
+
+
+// ============================================================================
 // SCENE OBJECTS
 // ============================================================================
 struct Sphere {
@@ -342,11 +382,10 @@ vec3 traceRay(const vec3& origin, const vec3& direction) {
     }
 
     // Case 3: We missed everything, render local background
-    float t = 0.5f * (direction.y + 1.0f);
     if (currentUniverse == 1) {
-        return mix(vec3(0.01f, 0.01f, 0.02f), vec3(0.1f, 0.2f, 0.3f), t);
+        return getStarfieldColor(direction);
     } else {
-        // This case shouldn't be reached if camera is only in universe 1
+        float t = 0.5f * (direction.y + 1.0f);
         return mix(vec3(0.02f, 0.01f, 0.01f), vec3(0.3f, 0.1f, 0.2f), t);
     }
 }
@@ -519,6 +558,16 @@ struct Engine {
 // ============================================================================
 // INPUT CALLBACKS
 // ============================================================================
+void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+        glfwSetWindowShouldClose(window, true);
+    }
+    if (key == GLFW_KEY_U && action == GLFW_PRESS) {
+        currentUniverse = (currentUniverse == 1) ? 2 : 1;
+        cout << "\nSwitched to Universe " << currentUniverse << "\n";
+    }
+}
+
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_PRESS) {
@@ -557,6 +606,7 @@ int main() {
     Engine engine;
     
     // Set up input callbacks
+    glfwSetKeyCallback(engine.window, keyCallback);
     glfwSetMouseButtonCallback(engine.window, mouseButtonCallback);
     glfwSetCursorPosCallback(engine.window, cursorPosCallback);
     glfwSetScrollCallback(engine.window, scrollCallback);
@@ -592,6 +642,9 @@ int main() {
     cout << "  Left Mouse Drag: Orbit camera\n";
     cout << "  Shift + Left Drag: Pan camera\n";
     cout << "  Mouse Scroll: Zoom in/out\n";
+    cout << "  W/A/S/D: Move camera\n";
+    cout << "  Space/Shift+Space: Move up/down\n";
+    cout << "  U: Switch universe\n";
     cout << "  ESC: Exit\n\n";
     
     cout << "What you'll see:\n";
@@ -605,6 +658,7 @@ int main() {
     
     int frameCount = 0;
     while (!glfwWindowShouldClose(engine.window)) {
+        processInput(engine.window);
         engine.render();
         
         // Print progress every 10 frames
