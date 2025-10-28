@@ -157,3 +157,5 @@ vcpkg_installed
 !.brokk/project.properties
 
 .brokk/
+
+exports/

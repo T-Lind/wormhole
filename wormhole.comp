@@ -1,0 +1,246 @@
+#version 430 core
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, rgba32f) uniform writeonly image2D destTex;
+
+// UBO for camera data
+layout(std140, binding = 0) uniform Camera {
+    vec3 position;
+    float pad1;
+    vec3 target;
+    float pad2;
+    vec3 up;
+    float pad3;
+    float fov;
+} u_camera;
+
+struct Sphere {
+    vec3 center;
+    float radius;
+    vec3 color;
+    float pad4;
+};
+
+struct Cube {
+    vec3 center;
+    float size;
+    vec3 color;
+    float pad5;
+};
+
+layout(std430, binding = 1) buffer SphereBuffer {
+    Sphere spheres[];
+};
+
+layout(std430, binding = 2) buffer CubeBuffer {
+    Cube cubes[];
+};
+
+struct Star {
+    vec4 data; // x,y,z = direction, w = brightness
+};
+
+layout(std430, binding = 3) buffer StarBuffer {
+    Star stars[];
+};
+
+uniform int currentUniverse;
+uniform int numSpheres;
+uniform int numCubes;
+uniform int numStars;
+
+const float THROAT_RADIUS = 15.0f;
+const vec3 THROAT_CENTER = vec3(0, 0, 0);
+
+struct HitInfo {
+    bool hit;
+    float distance;
+    vec3 normal;
+    vec3 color;
+};
+
+// Ray-Sphere intersection
+bool intersectSphere(vec3 rayOrigin, vec3 rayDir, Sphere s, inout float t, out vec3 normal) {
+    vec3 oc = rayOrigin - s.center;
+    float a = dot(rayDir, rayDir);
+    float b = 2.0 * dot(oc, rayDir);
+    float c = dot(oc, oc) - s.radius * s.radius;
+    float discriminant = b * b - 4 * a * c;
+    if (discriminant < 0) return false;
+    
+    float t1 = (-b - sqrt(discriminant)) / (2.0 * a);
+    if (t1 > 0.001) {
+        t = t1;
+        normal = normalize((rayOrigin + rayDir * t) - s.center);
+        return true;
+    }
+    float t2 = (-b + sqrt(discriminant)) / (2.0 * a);
+    if (t2 > 0.001) {
+        t = t2;
+        normal = normalize((rayOrigin + rayDir * t) - s.center);
+        return true;
+    }
+    return false;
+}
+
+// Ray-AABB (Cube) intersection
+bool intersectCube(vec3 rayOrigin, vec3 rayDir, Cube c, inout float t, out vec3 normal) {
+    vec3 minBound = c.center - vec3(c.size / 2.0);
+    vec3 maxBound = c.center + vec3(c.size / 2.0);
+    vec3 invDir = 1.0 / rayDir;
+    vec3 t0 = (minBound - rayOrigin) * invDir;
+    vec3 t1 = (maxBound - rayOrigin) * invDir;
+
+    vec3 tmin = min(t0, t1);
+    vec3 tmax = max(t0, t1);
+
+    float tNear = max(max(tmin.x, tmin.y), tmin.z);
+    float tFar = min(min(tmax.x, tmax.y), tmax.z);
+
+    if (tNear > tFar || tFar < 0.001) return false;
+
+    t = (tNear > 0.001) ? tNear : tFar;
+
+    vec3 hitPoint = rayOrigin + rayDir * t;
+    vec3 d = hitPoint - c.center;
+    vec3 absD = abs(d);
+    
+    if (absD.x > absD.y && absD.x > absD.z) {
+        normal = vec3(sign(d.x), 0, 0);
+    } else if (absD.y > absD.z) {
+        normal = vec3(0, sign(d.y), 0);
+    } else {
+        normal = vec3(0, 0, sign(d.z));
+    }
+    return true;
+}
+
+HitInfo traceScene(vec3 origin, vec3 direction, int universe) {
+    HitInfo hitInfo;
+    hitInfo.hit = false;
+    hitInfo.distance = 1e10;
+
+    if (universe == 1) {
+        for (int i = 0; i < numSpheres; ++i) {
+            float t;
+            vec3 n;
+            if (intersectSphere(origin, direction, spheres[i], t, n) && t < hitInfo.distance) {
+                hitInfo.hit = true;
+                hitInfo.distance = t;
+                hitInfo.normal = n;
+                hitInfo.color = spheres[i].color;
+            }
+        }
+    } else { // universe == 2
+        for (int i = 0; i < numCubes; ++i) {
+            float t;
+            vec3 n;
+            if (intersectCube(origin, direction, cubes[i], t, n) && t < hitInfo.distance) {
+                hitInfo.hit = true;
+                hitInfo.distance = t;
+                hitInfo.normal = n;
+                hitInfo.color = cubes[i].color;
+            }
+        }
+    }
+    return hitInfo;
+}
+
+vec3 getStarfieldColor(vec3 direction) {
+    vec3 color = vec3(0.0);
+    float fov_factor = 0.005; // a small value makes stars appear as points
+
+    for(int i = 0; i < numStars; ++i) {
+        vec3 star_dir = stars[i].data.xyz;
+        float dist = acos(dot(direction, star_dir));
+        
+        float intensity = stars[i].data.w * smoothstep(fov_factor, 0.0, dist);
+        
+        if (intensity > 0.0) {
+            color += vec3(intensity); // White stars
+        }
+    }
+    return color;
+}
+
+void main() {
+    ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dims = imageSize(destTex);
+    if (pixel_coords.x >= dims.x || pixel_coords.y >= dims.y) {
+        return;
+    }
+
+    // Camera setup
+    vec3 forward = normalize(u_camera.target - u_camera.position);
+    vec3 right = normalize(cross(forward, u_camera.up));
+    vec3 up = cross(right, forward);
+    float aspect = float(dims.x) / float(dims.y);
+    float tanHalfFov = tan(radians(u_camera.fov) * 0.5);
+
+    // Get ray direction
+    float u = (2.0 * (pixel_coords.x + 0.5) / dims.x - 1.0) * aspect * tanHalfFov;
+    float v = (1.0 - 2.0 * (pixel_coords.y + 0.5) / dims.y) * tanHalfFov;
+    vec3 rayDir = normalize(u * right + v * up + forward);
+
+    // Simplified Wormhole intersection (just a sphere test)
+    float t_throat;
+    vec3 throat_normal; // unused
+    Sphere throat_sphere = Sphere(THROAT_CENTER, THROAT_RADIUS, vec3(0), 0);
+    bool hitsThroat = intersectSphere(u_camera.position, rayDir, throat_sphere, t_throat, throat_normal);
+
+    HitInfo sceneHit = traceScene(u_camera.position, rayDir, currentUniverse);
+
+    vec3 final_color;
+
+    // Case 1: Hit local object
+    if (sceneHit.hit && (!hitsThroat || sceneHit.distance < t_throat)) {
+        vec3 hitPoint = u_camera.position + rayDir * sceneHit.distance;
+        vec3 viewDir = -rayDir;
+        vec3 lightDir = normalize(vec3(1, 1, 1));
+        
+        float diffuse = max(0.0, dot(sceneHit.normal, lightDir));
+        vec3 reflectDir = reflect(-lightDir, sceneHit.normal);
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
+
+        float ambient = 0.3;
+        final_color = sceneHit.color * (ambient + diffuse * 0.7) + vec3(0.5) * spec;
+    }
+    // Case 2: Hit wormhole
+    else if (hitsThroat) {
+        vec3 P_in = u_camera.position + rayDir * t_throat;
+        vec3 hit_normal = normalize(P_in - THROAT_CENTER);
+        
+        float fresnel = pow(1.0 - abs(dot(rayDir, hit_normal)), 3.0);
+        
+        vec3 refracted_dir = refract(rayDir, hit_normal, 1.0 / 1.5);
+        vec3 new_origin = P_in - hit_normal * (THROAT_RADIUS * 2.0f) + refracted_dir * 0.1;
+        
+        int otherUniverse = (currentUniverse == 1) ? 2 : 1;
+        HitInfo otherSceneHit = traceScene(new_origin, refracted_dir, otherUniverse);
+
+        vec3 remote_color;
+        if (otherSceneHit.hit) {
+            vec3 hitPoint = new_origin + refracted_dir * otherSceneHit.distance;
+            vec3 viewDir = -refracted_dir;
+            vec3 lightDir = normalize(vec3(1, 1, 1));
+            float diffuse = max(0.0, dot(otherSceneHit.normal, lightDir));
+            vec3 reflectDir = reflect(-lightDir, otherSceneHit.normal);
+            float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
+            remote_color = otherSceneHit.color * (0.3 + diffuse * 0.7) + vec3(0.5) * spec;
+        } else {
+            remote_color = getStarfieldColor(refracted_dir);
+        }
+        
+        final_color = mix(remote_color, vec3(0.5, 0.8, 1.0), fresnel * 0.8);
+    }
+    // Case 3: Hit background
+    else {
+        if (currentUniverse == 1) {
+            final_color = getStarfieldColor(rayDir);
+        } else {
+            final_color = vec3(0.02, 0.01, 0.01); // Dark red background for universe 2
+        }
+    }
+
+    imageStore(destTex, pixel_coords, vec4(final_color, 1.0));
+}
