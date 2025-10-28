@@ -21,9 +21,10 @@ using namespace std;
 const int WIDTH = 800;
 const int HEIGHT = 600;
 
-// Wormhole portal parameters
-const float PORTAL_RADIUS = 15.0f;  // Portal size
-const vec3 PORTAL_CENTER = vec3(0, 0, 0);  // Portal location
+// Wormhole parameters
+const float THROAT_RADIUS = 15.0f;  // Wormhole throat radius (b0)
+const vec3 THROAT_CENTER = vec3(0, 0, 0);  // Throat location
+const float BENDING_STRENGTH = 0.8f;  // How much light bends. Lower is less distortion.
 
 // Which universe is the camera in? (1 = spheres, 2 = cubes)
 int currentUniverse = 1;
@@ -38,6 +39,7 @@ struct Camera {
     float fov;
     float azimuth, elevation, radius;
     bool dragging = false;
+    bool panning = false;
     double lastX = 0, lastY = 0;
 
     Camera() : position(0, 0, 100.0f), target(0, 0, 0), up(0, 1, 0), 
@@ -56,9 +58,19 @@ struct Camera {
         updatePosition();
     }
 
+    void pan(float dx, float dy) {
+        vec3 forward = normalize(target - position);
+        vec3 right = normalize(cross(forward, up));
+        vec3 localUp = normalize(cross(right, forward));
+        float panSpeed = 0.1f * (radius / 100.0f);
+        target -= right * dx * panSpeed;
+        target += localUp * dy * panSpeed;
+        updatePosition();
+    }
+
     void zoom(float delta) {
         radius *= (1.0f - delta * 0.1f);
-        radius = glm::clamp(radius, 10.0f, 500.0f);
+        radius = glm::clamp(radius, 20.0f, 500.0f);
         updatePosition();
     }
 };
@@ -152,163 +164,190 @@ struct Cube {
 
 vector<Sphere> spheres;
 vector<Cube> cubes;
+vector<vec4> stars; // x,y,z for direction, w for brightness
 
 // ============================================================================
-// PORTAL / WORMHOLE
+// STARFIELD
 // ============================================================================
-struct Portal {
+void generateStars(int count) {
+    for (int i = 0; i < count; i++) {
+        vec3 dir = normalize(vec3(
+            (rand() / (float)RAND_MAX) * 2.0f - 1.0f,
+            (rand() / (float)RAND_MAX) * 2.0f - 1.0f,
+            (rand() / (float)RAND_MAX) * 2.0f - 1.0f
+        ));
+        float brightness = (rand() / (float)RAND_MAX) * 0.5f + 0.5f;
+        stars.push_back(vec4(dir, brightness));
+    }
+}
+
+vec3 getStarfieldColor(const vec3& direction) {
+    vec3 color = vec3(0.0);
+    float fov_factor = 0.005; // a small value makes stars appear as points
+
+    for(const auto& star : stars) {
+        vec3 star_dir = vec3(star);
+        float dist = acos(dot(direction, star_dir));
+        
+        // Using smoothstep to create a soft falloff for the star's glow
+        float intensity = star.w * smoothstep(fov_factor, 0.0f, dist);
+        
+        if (intensity > 0.0) {
+            color += vec3(intensity); // White stars, but could be colored
+        }
+    }
+    return color;
+}
+
+// ============================================================================
+// WORMHOLE THROAT (SPHERICAL)
+// ============================================================================
+struct WormholeThroat {
     vec3 center;
-    vec3 normal;  // Portal facing direction
-    float radius;
+    float radius;  // Throat radius (b0)
     
-    Portal(vec3 c, vec3 n, float r) : center(c), normal(normalize(n)), radius(r) {}
+    WormholeThroat(vec3 c, float r) : center(c), radius(r) {}
     
-    // Check if ray intersects portal disk
+    // Check if ray intersects throat sphere
     bool intersect(const vec3& rayOrigin, const vec3& rayDir, float& t) const {
-        // Plane intersection
-        float denom = dot(normal, rayDir);
-        if (abs(denom) < 0.0001f) return false;  // Parallel to plane
+        vec3 oc = rayOrigin - center;
+        float a = dot(rayDir, rayDir);
+        float b = 2.0f * dot(oc, rayDir);
+        float c_val = dot(oc, oc) - radius * radius;
+        float discriminant = b * b - 4 * a * c_val;
         
-        t = dot(center - rayOrigin, normal) / denom;
-        if (t < 0.001f) return false;  // Behind ray
+        if (discriminant < 0) return false;
         
-        // Check if hit point is within disk radius
-        vec3 hitPoint = rayOrigin + rayDir * t;
-        float dist = length(hitPoint - center);
+        float t1 = (-b - sqrt(discriminant)) / (2.0f * a);
+        if (t1 > 0.001f) {
+            t = t1;
+            return true;
+        }
         
-        return dist <= radius;
+        float t2 = (-b + sqrt(discriminant)) / (2.0f * a);
+        if (t2 > 0.001f) {
+            t = t2;
+            return true;
+        }
+        
+        return false;
     }
 };
 
-Portal portal(PORTAL_CENTER, vec3(0, 0, 1), PORTAL_RADIUS);
+WormholeThroat throat(THROAT_CENTER, THROAT_RADIUS);
 
 // ============================================================================
-// RAY TRACING WITH PORTAL CONNECTION
+// RAY TRACING HELPER
 // ============================================================================
-vec3 traceRay(const vec3& origin, const vec3& direction) {
-    // Check if ray hits the portal
-    float portal_t;
-    bool hitPortal = portal.intersect(origin, direction, portal_t);
-    
-    float closest_t = 1e10f;
-    vec3 hitNormal;
-    vec3 hitColor;
-    bool hitSomething = false;
-    int hitUniverse = currentUniverse;  // Which universe did we hit something in?
-    
-    // Only check objects in CURRENT universe (unless we go through portal)
-    if (currentUniverse == 1) {
-        // We're in Universe 1 (spheres) - only check spheres normally
+struct HitInfo {
+    bool hit = false;
+    float distance = 1e10f;
+    vec3 normal;
+    vec3 color;
+};
+
+HitInfo traceScene(const vec3& origin, const vec3& direction, int universe) {
+    HitInfo hitInfo;
+
+    if (universe == 1) {
+        // Check spheres
         for (const auto& sphere : spheres) {
             float t;
             vec3 normal;
-            if (sphere.intersect(origin, direction, t, normal) && t < closest_t) {
-                closest_t = t;
-                hitNormal = normal;
-                hitColor = sphere.color;
-                hitSomething = true;
-                hitUniverse = 1;
+            if (sphere.intersect(origin, direction, t, normal) && t < hitInfo.distance) {
+                hitInfo.hit = true;
+                hitInfo.distance = t;
+                hitInfo.normal = normal;
+                hitInfo.color = sphere.color;
             }
         }
-    } else {
-        // We're in Universe 2 (cubes) - only check cubes normally
+    } else { // universe == 2
+        // Check cubes
         for (const auto& cube : cubes) {
             float t;
             vec3 normal;
-            if (cube.intersect(origin, direction, t, normal) && t < closest_t) {
-                closest_t = t;
-                hitNormal = normal;
-                hitColor = cube.color;
-                hitSomething = true;
-                hitUniverse = 2;
+            if (cube.intersect(origin, direction, t, normal) && t < hitInfo.distance) {
+                hitInfo.hit = true;
+                hitInfo.distance = t;
+                hitInfo.normal = normal;
+                hitInfo.color = cube.color;
             }
         }
     }
-    
-    // If we hit portal BEFORE hitting any object, look through to other universe!
-    if (hitPortal && portal_t < closest_t) {
-        // Ray goes through portal! Now check OTHER universe
-        vec3 portalHitPoint = origin + direction * portal_t;
-        
-        // Continue ray from portal into other universe
-        // For now, just continue straight (no bending yet)
-        vec3 newOrigin = portalHitPoint + direction * 0.1f;  // Small offset
-        
-        float otherUniverse_t = 1e10f;
-        bool hitOtherSide = false;
-        
-        if (currentUniverse == 1) {
-            // Looking through from Universe 1 → see Universe 2 (cubes)
-            for (const auto& cube : cubes) {
-                float t;
-                vec3 normal;
-                if (cube.intersect(newOrigin, direction, t, normal) && t < otherUniverse_t) {
-                    otherUniverse_t = t;
-                    hitNormal = normal;
-                    hitColor = cube.color;
-                    hitOtherSide = true;
-                }
-            }
-        } else {
-            // Looking through from Universe 2 → see Universe 1 (spheres)
-            for (const auto& sphere : spheres) {
-                float t;
-                vec3 normal;
-                if (sphere.intersect(newOrigin, direction, t, normal) && t < otherUniverse_t) {
-                    otherUniverse_t = t;
-                    hitNormal = normal;
-                    hitColor = sphere.color;
-                    hitOtherSide = true;
-                }
-            }
-        }
-        
-        if (hitOtherSide) {
-            // Shade the object from the other universe
-            vec3 lightDir = normalize(vec3(1, 1, 1));
-            float diffuse = glm::max(0.0f, dot(hitNormal, lightDir));
-            float ambient = 0.3f;
-            return hitColor * (ambient + (1.0f - ambient) * diffuse);
-        } else {
-            // Portal shows other universe's background
-            float t = 0.5f * (direction.y + 1.0f);
-            if (currentUniverse == 1) {
-                // Looking into Universe 2 - greenish tint
-                return mix(vec3(0.05f, 0.15f, 0.05f), vec3(0.2f, 0.8f, 0.4f), t);
-            } else {
-                // Looking into Universe 1 - reddish tint
-                return mix(vec3(0.15f, 0.05f, 0.05f), vec3(0.8f, 0.4f, 0.2f), t);
-            }
-        }
-    }
-    
-    // Visualize portal rim (glowing edge)
-    if (hitPortal && portal_t < closest_t * 1.1f) {
-        vec3 portalHitPoint = origin + direction * portal_t;
-        float distFromCenter = length(portalHitPoint - PORTAL_CENTER);
-        if (distFromCenter > PORTAL_RADIUS * 0.9f) {
-            // Near edge - glow
-            float edge = (distFromCenter - PORTAL_RADIUS * 0.9f) / (PORTAL_RADIUS * 0.1f);
-            return mix(vec3(0.3f, 0.6f, 1.0f), vec3(0, 0, 0), edge);
-        }
-    }
-    
-    // Regular hit in current universe
-    if (hitSomething) {
+    return hitInfo;
+}
+
+
+// ============================================================================
+// RAY TRACING WITH GRAVITATIONAL LENSING
+// ============================================================================
+vec3 traceRay(const vec3& origin, const vec3& direction) {
+    float t_throat;
+    bool hitsThroat = throat.intersect(origin, direction, t_throat);
+
+    HitInfo sceneHit = traceScene(origin, direction, currentUniverse);
+
+    // Case 1: We hit a local object before the throat (or miss the throat entirely)
+    if (sceneHit.hit && (!hitsThroat || sceneHit.distance < t_throat)) {
+        vec3 viewDir = normalize(origin - (origin + direction * sceneHit.distance));
         vec3 lightDir = normalize(vec3(1, 1, 1));
-        float diffuse = glm::max(0.0f, dot(hitNormal, lightDir));
+        
+        // Diffuse
+        float diffuse = glm::max(0.0f, dot(sceneHit.normal, lightDir));
+        
+        // Specular
+        vec3 reflectDir = reflect(-lightDir, sceneHit.normal);
+        float spec = pow(glm::max(dot(viewDir, reflectDir), 0.0f), 32.0f);
+
         float ambient = 0.3f;
-        return hitColor * (ambient + (1.0f - ambient) * diffuse);
+        return sceneHit.color * (ambient + diffuse * 0.7f) + vec3(0.5f) * spec;
     }
-    
-    // Background for current universe
+
+    // Case 2: We are looking at the wormhole
+    if (hitsThroat) {
+        vec3 P_in = origin + direction * t_throat;
+        vec3 hit_normal = normalize(P_in - throat.center);
+
+        // Fresnel effect for a glowing edge
+        float fresnel = pow(1.0 - abs(dot(direction, hit_normal)), 3.0);
+
+        // LENSING EFFECT: Refract the ray
+        float ratio = 1.0 / 1.5; // "Refractive index" for lensing
+        vec3 refracted_dir = refract(direction, hit_normal, ratio);
+        
+        // The new ray starts on the other side of the wormhole
+        vec3 new_origin = P_in - hit_normal * (throat.radius * 2.0f);
+        new_origin += refracted_dir * 0.1f;
+
+        // Trace into the other universe
+        int otherUniverse = (currentUniverse == 1) ? 2 : 1;
+        HitInfo otherSceneHit = traceScene(new_origin, refracted_dir, otherUniverse);
+
+        vec3 final_color;
+        if (otherSceneHit.hit) {
+            // We see an object through the wormhole
+            vec3 viewDir = normalize(new_origin - (new_origin + refracted_dir * otherSceneHit.distance));
+            vec3 lightDir = normalize(vec3(1, 1, 1));
+            float diffuse = glm::max(0.0f, dot(otherSceneHit.normal, lightDir));
+            vec3 reflectDir = reflect(-lightDir, otherSceneHit.normal);
+            float spec = pow(glm::max(dot(viewDir, reflectDir), 0.0f), 32.0f);
+            final_color = otherSceneHit.color * (0.3f + diffuse * 0.7f) + vec3(0.5f) * spec;
+        } else {
+            // We see the other universe's starfield
+            final_color = getStarfieldColor(refracted_dir);
+        }
+
+        // Blend with Fresnel glow
+        return mix(final_color, vec3(0.5, 0.8, 1.0), fresnel * 0.8f);
+    }
+
+    // Case 3: We missed everything, render local background
     float t = 0.5f * (direction.y + 1.0f);
     if (currentUniverse == 1) {
-        // Universe 1 background - bluish
-        return mix(vec3(0.1f, 0.1f, 0.15f), vec3(0.4f, 0.5f, 0.8f), t);
+        return mix(vec3(0.01f, 0.01f, 0.02f), vec3(0.1f, 0.2f, 0.3f), t);
     } else {
-        // Universe 2 background - purplish
-        return mix(vec3(0.15f, 0.1f, 0.15f), vec3(0.6f, 0.4f, 0.8f), t);
+        // This case shouldn't be reached if camera is only in universe 1
+        return mix(vec3(0.02f, 0.01f, 0.01f), vec3(0.3f, 0.1f, 0.2f), t);
     }
 }
 
@@ -434,18 +473,31 @@ struct Engine {
         #pragma omp parallel for schedule(dynamic, 4)
         for (int y = 0; y < HEIGHT; y++) {
             for (int x = 0; x < WIDTH; x++) {
-                // Calculate ray direction
-                float u = (2.0f * (x + 0.5f) / WIDTH - 1.0f) * aspect * tanHalfFov;
-                float v = (1.0f - 2.0f * (y + 0.5f) / HEIGHT) * tanHalfFov;
                 
-                vec3 rayDir = normalize(u * right + v * up + forward);
-                vec3 color = traceRay(camera.position, rayDir);
-                
+                vec3 final_color(0.0f);
+                const int samples = 2; // 2x2 Supersampling Anti-Aliasing
+
+                for (int i = 0; i < samples; i++) {
+                    for (int j = 0; j < samples; j++) {
+                        // Calculate sub-pixel offsets for SSAA
+                        float offX = (float(i) + 0.5f) / float(samples);
+                        float offY = (float(j) + 0.5f) / float(samples);
+
+                        // Calculate ray direction for this sub-pixel
+                        float u = (2.0f * (x + offX) / WIDTH - 1.0f) * aspect * tanHalfFov;
+                        float v = (1.0f - 2.0f * (y + offY) / HEIGHT) * tanHalfFov;
+                        
+                        vec3 rayDir = normalize(u * right + v * up + forward);
+                        final_color += traceRay(camera.position, rayDir);
+                    }
+                }
+                final_color /= (float)(samples * samples); // Average the colors
+
                 // Write to pixel buffer
                 int idx = (y * WIDTH + x) * 3;
-                pixels[idx + 0] = (unsigned char)(glm::clamp(color.r, 0.0f, 1.0f) * 255);
-                pixels[idx + 1] = (unsigned char)(glm::clamp(color.g, 0.0f, 1.0f) * 255);
-                pixels[idx + 2] = (unsigned char)(glm::clamp(color.b, 0.0f, 1.0f) * 255);
+                pixels[idx + 0] = (unsigned char)(glm::clamp(final_color.r, 0.0f, 1.0f) * 255);
+                pixels[idx + 1] = (unsigned char)(glm::clamp(final_color.g, 0.0f, 1.0f) * 255);
+                pixels[idx + 2] = (unsigned char)(glm::clamp(final_color.b, 0.0f, 1.0f) * 255);
             }
         }
         
@@ -471,9 +523,11 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_PRESS) {
             camera.dragging = true;
+            camera.panning = (mods & GLFW_MOD_SHIFT);
             glfwGetCursorPos(window, &camera.lastX, &camera.lastY);
         } else {
             camera.dragging = false;
+            camera.panning = false;
         }
     }
 }
@@ -482,7 +536,11 @@ void cursorPosCallback(GLFWwindow* window, double x, double y) {
     if (camera.dragging) {
         float dx = x - camera.lastX;
         float dy = y - camera.lastY;
-        camera.orbit(dx, dy);
+        if (camera.panning) {
+            camera.pan(dx, dy);
+        } else {
+            camera.orbit(dx, dy);
+        }
         camera.lastX = x;
         camera.lastY = y;
     }
@@ -507,35 +565,41 @@ int main() {
     cout << "\n=== WORMHOLE PORTAL SIMULATION ===\n\n";
     
     // UNIVERSE 1: SPHERES with RGB colors (you start here!)
-    spheres.push_back(Sphere(vec3(-40, 20, 0), 10, vec3(1.0f, 0.2f, 0.2f)));    // Red
-    spheres.push_back(Sphere(vec3(-40, -20, 0), 10, vec3(0.2f, 1.0f, 0.2f)));   // Green  
-    spheres.push_back(Sphere(vec3(-40, 0, 25), 10, vec3(0.2f, 0.2f, 1.0f)));    // Blue
-    spheres.push_back(Sphere(vec3(-60, 0, 0), 12, vec3(1.0f, 0.5f, 0.0f)));     // Orange
+    spheres.push_back(Sphere(vec3(-80, 40, 0), 10, vec3(1.0f, 0.2f, 0.2f)));    // Red
+    spheres.push_back(Sphere(vec3(-80, -40, 0), 10, vec3(0.2f, 1.0f, 0.2f)));   // Green
+    spheres.push_back(Sphere(vec3(-100, 0, 50), 10, vec3(0.2f, 0.2f, 1.0f)));    // Blue
+    spheres.push_back(Sphere(vec3(-120, 0, 0), 12, vec3(1.0f, 0.5f, 0.0f)));     // Orange
     
     // UNIVERSE 2: CUBES with CMY colors (visible ONLY through portal!)
-    cubes.push_back(Cube(vec3(40, 20, 0), 18, vec3(1.0f, 1.0f, 0.2f)));     // Yellow
-    cubes.push_back(Cube(vec3(40, -20, 0), 18, vec3(1.0f, 0.2f, 1.0f)));    // Magenta
-    cubes.push_back(Cube(vec3(40, 0, 25), 18, vec3(0.2f, 1.0f, 1.0f)));     // Cyan
-    cubes.push_back(Cube(vec3(60, 0, 0), 22, vec3(1.0f, 1.0f, 1.0f)));      // White
+    cubes.push_back(Cube(vec3(80, 40, 0), 18, vec3(1.0f, 1.0f, 0.2f)));     // Yellow
+    cubes.push_back(Cube(vec3(80, -40, 0), 18, vec3(1.0f, 0.2f, 1.0f)));    // Magenta
+    cubes.push_back(Cube(vec3(100, 0, 50), 18, vec3(0.2f, 1.0f, 1.0f)));     // Cyan
+    cubes.push_back(Cube(vec3(120, 0, 0), 22, vec3(1.0f, 1.0f, 1.0f)));      // White
     
     currentUniverse = 1;  // Start in Universe 1 (spheres)
     
+    generateStars(1000); // Generate stars for universe 2
+
     cout << "Universe 1 (Current): " << spheres.size() << " SPHERES (RGB colors)\n";
-    cout << "Universe 2 (Through portal): " << cubes.size() << " CUBES (CMY colors)\n";
-    cout << "\nPortal: " << PORTAL_RADIUS << " unit radius disk at origin\n";
+    cout << "Universe 2 (Through throat): " << cubes.size() << " CUBES (CMY colors)\n";
+    cout << "\nWormhole Throat: " << THROAT_RADIUS << " unit radius SPHERE at origin\n";
+    cout << "Light Bending: ENABLED (Refraction-based Lensing)\n";
+    cout << "Visuals: ADDED Starfield, Fresnel Glow, Specular Highlights\n";
     cout << "Camera at: (" << camera.position.x << ", " << camera.position.y << ", " << camera.position.z << ")\n";
     cout << "Looking at: (" << camera.target.x << ", " << camera.target.y << ", " << camera.target.z << ")\n\n";
     
     cout << "Controls:\n";
     cout << "  Left Mouse Drag: Orbit camera\n";
+    cout << "  Shift + Left Drag: Pan camera\n";
     cout << "  Mouse Scroll: Zoom in/out\n";
     cout << "  ESC: Exit\n\n";
     
     cout << "What you'll see:\n";
-    cout << "  - Colorful SPHERES in your universe (RGB colors)\n";
-    cout << "  - Blue glowing PORTAL disk at center\n";
-    cout << "  - Look THROUGH portal to see CUBES from other universe!\n";
-    cout << "  - Cubes are ONLY visible through the portal\n\n";
+    cout << "  - SPHERES with specular highlights in your universe\n";
+    cout << "  - A glowing, glass-like SPHERICAL wormhole throat\n";
+    cout << "  - A STARFIELD background visible only through the wormhole\n";
+    cout << "  - SMOOTH, high-quality rendering (due to anti-aliasing)\n";
+    cout << "  - Objects will appear DISTORTED through the throat\n\n";
     
     cout << "Rendering...\n";
     
