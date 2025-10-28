@@ -18,10 +18,24 @@ add_executable(Wormhole2D 2D_lensing.cpp)
 target_link_libraries(Wormhole2D PRIVATE ${DEPS})
 target_include_directories(Wormhole2D PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# 3D Black Hole executable
+# 3D Black Hole executable (legacy)
 add_executable(Wormhole3D wormhole.cpp)
 target_link_libraries(Wormhole3D PRIVATE ${DEPS})
 target_include_directories(Wormhole3D PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Wormhole Simulation executable (new)
+add_executable(WormholeSim wormhole_sim.cpp)
+target_link_libraries(WormholeSim PRIVATE ${DEPS})
+target_include_directories(WormholeSim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Enable OpenMP for parallel rendering
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(WormholeSim PRIVATE OpenMP::OpenMP_CXX)
+    message(STATUS "OpenMP enabled for WormholeSim - parallel rendering active")
+else()
+    message(WARNING "OpenMP not found - rendering will be slower")
+endif()
 
 # Shader files (copy to output dir)
 file(GLOB SHADERS
