@@ -37,9 +37,9 @@ const int HEIGHT = 600;
 const int MOVIE_FPS = 24;
 
 // Wormhole parameters
-const float THROAT_RADIUS = 15.0f;  // Wormhole throat radius (b0)
+const float THROAT_RADIUS = 25.0f;  // Wormhole throat radius (b0)
 const vec3 THROAT_CENTER = vec3(0, 0, 0);  // Throat location
-const float BENDING_STRENGTH = 0.8f;  // How much light bends. Lower is less distortion.
+const float BENDING_STRENGTH = 0.95f;  // How much light bends. Lower is less distortion.
 
 // Which universe is the camera in? (1 = spheres, 2 = cubes)
 int currentUniverse = 1;
@@ -122,15 +122,14 @@ void processInput(GLFWwindow* window) {
         camera.target += right * cameraSpeed;
     }
 
-    bool isShiftPressed = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+    // Vertical Movement: Shift for UP, Space for DOWN
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-        if (isShiftPressed) {
-            camera.position -= localUp * cameraSpeed;
-            camera.target -= localUp * cameraSpeed;
-        } else {
-            camera.position += localUp * cameraSpeed;
-            camera.target += localUp * cameraSpeed;
-        }
+        camera.position -= localUp * cameraSpeed; // Down
+        camera.target -= localUp * cameraSpeed;
+    }
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
+        camera.position += localUp * cameraSpeed; // Up
+        camera.target += localUp * cameraSpeed;
     }
 }
 
@@ -139,93 +138,25 @@ void processInput(GLFWwindow* window) {
 // SCENE OBJECTS
 // ============================================================================
 struct alignas(16) Sphere {
-    vec3 center;
-    float radius;
-    vec3 color;
+    vec4 centerAndRadius; // .xyz = center, .w = radius
+    vec4 color;           // .rgb = color
+    vec4 properties;      // .x = isEmissive, .y = universeID
     
-    Sphere(vec3 c, float r, vec3 col) 
-        : center(c), radius(r), color(col) {}
-    
-    bool intersect(const vec3& rayOrigin, const vec3& rayDir, float& t, vec3& normal) const {
-        vec3 oc = rayOrigin - center;
-        float a = dot(rayDir, rayDir);
-        float b = 2.0f * dot(oc, rayDir);
-        float c = dot(oc, oc) - radius * radius;
-        float discriminant = b * b - 4 * a * c;
-        
-        if (discriminant < 0) return false;
-        
-        float t1 = (-b - sqrt(discriminant)) / (2.0f * a);
-        if (t1 > 0.001f) {
-            t = t1;
-            vec3 hitPoint = rayOrigin + rayDir * t;
-            normal = normalize(hitPoint - center);
-            return true;
-        }
-        
-        float t2 = (-b + sqrt(discriminant)) / (2.0f * a);
-        if (t2 > 0.001f) {
-            t = t2;
-            vec3 hitPoint = rayOrigin + rayDir * t;
-            normal = normalize(hitPoint - center);
-            return true;
-        }
-        
-        return false;
+    Sphere(vec3 c, float r, vec3 col, bool emissive = false, int universe = 1) {
+        centerAndRadius = vec4(c, r);
+        color = vec4(col, 1.0); // alpha unused for now
+        properties = vec4(emissive ? 1.0f : 0.0f, float(universe), 0.0f, 0.0f);
     }
-};
-
-struct alignas(16) Cube {
-    vec3 center;
-    float size;
-    vec3 color;
     
-    Cube(vec3 c, float s, vec3 col) 
-        : center(c), size(s), color(col) {}
-    
-    bool intersect(const vec3& rayOrigin, const vec3& rayDir, float& t, vec3& normal) const {
-        // Axis-aligned bounding box intersection
-        vec3 minBound = center - vec3(size/2);
-        vec3 maxBound = center + vec3(size/2);
-        
-        vec3 invDir = vec3(1.0f) / rayDir;
-        vec3 t0 = (minBound - rayOrigin) * invDir;
-        vec3 t1 = (maxBound - rayOrigin) * invDir;
-        
-        vec3 tmin = glm::min(t0, t1);
-        vec3 tmax = glm::max(t0, t1);
-        
-        float tNear = glm::max(glm::max(tmin.x, tmin.y), tmin.z);
-        float tFar = glm::min(glm::min(tmax.x, tmax.y), tmax.z);
-        
-        if (tNear > tFar || tFar < 0.001f) return false;
-        
-        t = (tNear > 0.001f) ? tNear : tFar;
-        
-        // Calculate normal based on which face was hit
-        vec3 hitPoint = rayOrigin + rayDir * t;
-        vec3 d = hitPoint - center;
-        vec3 absD = glm::abs(d);
-        float halfSize = size / 2.0f;
-        
-        if (absD.x > absD.y && absD.x > absD.z) {
-            normal = vec3(glm::sign(d.x), 0, 0);
-        } else if (absD.y > absD.z) {
-            normal = vec3(0, glm::sign(d.y), 0);
-        } else {
-            normal = vec3(0, 0, glm::sign(d.z));
-        }
-        
-        return true;
-    }
+    // This CPU-side intersection is now unused as logic is fully in GPU
 };
 
 struct alignas(16) Star {
     vec4 data; // .xyz = direction, .w = brightness
+    vec4 colorAndSize; // .xyz = color, .w = size
 };
 
 vector<Sphere> spheres;
-vector<Cube> cubes;
 vector<Star> stars;
 
 // ============================================================================
@@ -239,178 +170,33 @@ void generateStars(int count) {
             (rand() / (float)RAND_MAX) * 2.0f - 1.0f
         ));
         float brightness = (rand() / (float)RAND_MAX) * 0.5f + 0.5f;
-        stars.push_back({vec4(dir, brightness)});
+        float size = (rand() / (float)RAND_MAX) * 0.005f + 0.001f;
+
+        // Give stars some color variation (blues, whites, yellows)
+        float temp = (rand() / (float)RAND_MAX);
+        vec3 color;
+        if (temp < 0.33f) {
+            color = vec3(0.8, 0.8, 1.0); // Bluish
+        } else if (temp < 0.66f) {
+            color = vec3(1.0, 1.0, 1.0); // White
+        } else {
+            color = vec3(1.0, 1.0, 0.8); // Yellowish
+        }
+
+        stars.push_back({vec4(dir, brightness), vec4(color, size)});
     }
 }
-
-vec3 getStarfieldColor(const vec3& direction) {
-    vec3 color = vec3(0.0);
-    float fov_factor = 0.005; // a small value makes stars appear as points
-
-    for(const auto& star : stars) {
-        vec3 star_dir = vec3(star.data);
-        float dist = acos(dot(direction, star_dir));
-        
-        // Using smoothstep to create a soft falloff for the star's glow
-        float intensity = star.data.w * smoothstep(fov_factor, 0.0f, dist);
-        
-        if (intensity > 0.0) {
-            color += vec3(intensity); // White stars, but could be colored
-        }
-    }
-    return color;
-}
-
-// ============================================================================
-// WORMHOLE THROAT (SPHERICAL)
-// ============================================================================
-struct WormholeThroat {
-    vec3 center;
-    float radius;  // Throat radius (b0)
-    
-    WormholeThroat(vec3 c, float r) : center(c), radius(r) {}
-    
-    // Check if ray intersects throat sphere
-    bool intersect(const vec3& rayOrigin, const vec3& rayDir, float& t) const {
-        vec3 oc = rayOrigin - center;
-        float a = dot(rayDir, rayDir);
-        float b = 2.0f * dot(oc, rayDir);
-        float c_val = dot(oc, oc) - radius * radius;
-        float discriminant = b * b - 4 * a * c_val;
-        
-        if (discriminant < 0) return false;
-        
-        float t1 = (-b - sqrt(discriminant)) / (2.0f * a);
-        if (t1 > 0.001f) {
-            t = t1;
-            return true;
-        }
-        
-        float t2 = (-b + sqrt(discriminant)) / (2.0f * a);
-        if (t2 > 0.001f) {
-            t = t2;
-            return true;
-        }
-        
-        return false;
-    }
-};
-
-WormholeThroat throat(THROAT_CENTER, THROAT_RADIUS);
 
 // ============================================================================
 // RAY TRACING HELPER
 // ============================================================================
-struct HitInfo {
-    bool hit = false;
-    float distance = 1e10f;
-    vec3 normal;
-    vec3 color;
-};
-
-HitInfo traceScene(const vec3& origin, const vec3& direction, int universe) {
-    HitInfo hitInfo;
-
-    if (universe == 1) {
-        // Check spheres
-        for (const auto& sphere : spheres) {
-            float t;
-            vec3 normal;
-            if (sphere.intersect(origin, direction, t, normal) && t < hitInfo.distance) {
-                hitInfo.hit = true;
-                hitInfo.distance = t;
-                hitInfo.normal = normal;
-                hitInfo.color = sphere.color;
-            }
-        }
-    } else { // universe == 2
-        // Check cubes
-        for (const auto& cube : cubes) {
-            float t;
-            vec3 normal;
-            if (cube.intersect(origin, direction, t, normal) && t < hitInfo.distance) {
-                hitInfo.hit = true;
-                hitInfo.distance = t;
-                hitInfo.normal = normal;
-                hitInfo.color = cube.color;
-            }
-        }
-    }
-    return hitInfo;
-}
-
+// All traceScene and intersect logic is now exclusively on the GPU in wormhole.comp
+// The C++ versions are removed to avoid confusion and code duplication.
 
 // ============================================================================
 // RAY TRACING WITH GRAVITATIONAL LENSING
 // ============================================================================
-vec3 traceRay(const vec3& origin, const vec3& direction) {
-    float t_throat;
-    bool hitsThroat = throat.intersect(origin, direction, t_throat);
-
-    HitInfo sceneHit = traceScene(origin, direction, currentUniverse);
-
-    // Case 1: We hit a local object before the throat (or miss the throat entirely)
-    if (sceneHit.hit && (!hitsThroat || sceneHit.distance < t_throat)) {
-        vec3 viewDir = normalize(origin - (origin + direction * sceneHit.distance));
-        vec3 lightDir = normalize(vec3(1, 1, 1));
-        
-        // Diffuse
-        float diffuse = glm::max(0.0f, dot(sceneHit.normal, lightDir));
-        
-        // Specular
-        vec3 reflectDir = reflect(-lightDir, sceneHit.normal);
-        float spec = pow(glm::max(dot(viewDir, reflectDir), 0.0f), 32.0f);
-
-        float ambient = 0.3f;
-        return sceneHit.color * (ambient + diffuse * 0.7f) + vec3(0.5f) * spec;
-    }
-
-    // Case 2: We are looking at the wormhole
-    if (hitsThroat) {
-        vec3 P_in = origin + direction * t_throat;
-        vec3 hit_normal = normalize(P_in - throat.center);
-
-        // Fresnel effect for a glowing edge
-        float fresnel = pow(1.0 - abs(dot(direction, hit_normal)), 3.0);
-
-        // LENSING EFFECT: Refract the ray
-        float ratio = 1.0 / 1.5; // "Refractive index" for lensing
-        vec3 refracted_dir = refract(direction, hit_normal, ratio);
-        
-        // The new ray starts on the other side of the wormhole
-        vec3 new_origin = P_in - hit_normal * (throat.radius * 2.0f);
-        new_origin += refracted_dir * 0.1f;
-
-        // Trace into the other universe
-        int otherUniverse = (currentUniverse == 1) ? 2 : 1;
-        HitInfo otherSceneHit = traceScene(new_origin, refracted_dir, otherUniverse);
-
-        vec3 final_color;
-        if (otherSceneHit.hit) {
-            // We see an object through the wormhole
-            vec3 viewDir = normalize(new_origin - (new_origin + refracted_dir * otherSceneHit.distance));
-            vec3 lightDir = normalize(vec3(1, 1, 1));
-            float diffuse = glm::max(0.0f, dot(otherSceneHit.normal, lightDir));
-            vec3 reflectDir = reflect(-lightDir, otherSceneHit.normal);
-            float spec = pow(glm::max(dot(viewDir, reflectDir), 0.0f), 32.0f);
-            final_color = otherSceneHit.color * (0.3f + diffuse * 0.7f) + vec3(0.5f) * spec;
-        } else {
-            // We see the other universe's starfield
-            final_color = getStarfieldColor(refracted_dir);
-        }
-
-        // Blend with Fresnel glow
-        return mix(final_color, vec3(0.5, 0.8, 1.0), fresnel * 0.8f);
-    }
-
-    // Case 3: We missed everything, render local background
-    if (currentUniverse == 1) {
-        return getStarfieldColor(direction);
-    } else {
-        float t = 0.5f * (direction.y + 1.0f);
-        return mix(vec3(0.02f, 0.01f, 0.01f), vec3(0.3f, 0.1f, 0.2f), t);
-    }
-}
+// All traceRay logic is now exclusively on the GPU in wormhole.comp
 
 // ============================================================================
 // RENDERING ENGINE
@@ -426,7 +212,6 @@ struct Engine {
     GLuint computeShaderProgram;
     GLuint cameraUBO;
     GLuint spheresSSBO;
-    GLuint cubesSSBO;
     GLuint starsSSBO;
     
     Engine() {
@@ -443,7 +228,7 @@ struct Engine {
             exit(EXIT_FAILURE);
         }
         
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         
@@ -551,24 +336,25 @@ struct Engine {
 
         // Create SSBOs but don't load data yet
         glGenBuffers(1, &spheresSSBO);
-        glGenBuffers(1, &cubesSSBO);
         glGenBuffers(1, &starsSSBO);
     }
 
     void uploadSceneData() {
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, spheresSSBO);
-        glBufferData(GL_SHADER_STORAGE_BUFFER, spheres.size() * sizeof(Sphere), spheres.data(), GL_STATIC_DRAW);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, spheres.size() * sizeof(Sphere), spheres.data(), GL_DYNAMIC_DRAW); // Use DYNAMIC_DRAW for spheres
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, spheresSSBO);
         
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, cubesSSBO);
-        glBufferData(GL_SHADER_STORAGE_BUFFER, cubes.size() * sizeof(Cube), cubes.data(), GL_STATIC_DRAW);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, cubesSSBO);
-
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, starsSSBO);
         glBufferData(GL_SHADER_STORAGE_BUFFER, stars.size() * sizeof(Star), stars.data(), GL_STATIC_DRAW);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, starsSSBO);
     }
 
+    void updateSpheresSSBO() {
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, spheresSSBO);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, spheres.size() * sizeof(Sphere), spheres.data());
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0); // Unbind
+    }
+    
     void initQuad() {
         float quadVertices[] = {
             -1.0f,  1.0f,  0.0f, 1.0f,
@@ -604,11 +390,33 @@ struct Engine {
         glBindBuffer(GL_UNIFORM_BUFFER, cameraUBO);
         glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(Camera), &camera);
         
+        // Find sun positions and colors to pass to shader
+        vec3 sunPosU1 = vec3(0, 5000, -6000); 
+        vec3 sunColorU1 = vec3(1.0f, 0.9f, 0.7f);
+        vec3 sunPosU2 = vec3(0, -7000, 8000);
+        vec3 sunColorU2 = vec3(0.7f, 0.8f, 1.0f);
+
+        for(const auto& s : spheres) {
+            if (s.properties.x > 0.5f) { // isEmissive
+                if (s.properties.y > 1.5f) { // universeID == 2
+                    sunPosU2 = vec3(s.centerAndRadius);
+                    sunColorU2 = vec3(s.color);
+                } else { // universeID == 1
+                    sunPosU1 = vec3(s.centerAndRadius);
+                    sunColorU1 = vec3(s.color);
+                }
+            }
+        }
+
         // Update uniforms
         glUniform1i(glGetUniformLocation(computeShaderProgram, "currentUniverse"), currentUniverse);
         glUniform1i(glGetUniformLocation(computeShaderProgram, "numSpheres"), spheres.size());
-        glUniform1i(glGetUniformLocation(computeShaderProgram, "numCubes"), cubes.size());
         glUniform1i(glGetUniformLocation(computeShaderProgram, "numStars"), stars.size());
+        glUniform3fv(glGetUniformLocation(computeShaderProgram, "sunPosU1"), 1, value_ptr(sunPosU1));
+        glUniform3fv(glGetUniformLocation(computeShaderProgram, "sunPosU2"), 1, value_ptr(sunPosU2));
+        glUniform3fv(glGetUniformLocation(computeShaderProgram, "sunColorU1"), 1, value_ptr(sunColorU1));
+        glUniform3fv(glGetUniformLocation(computeShaderProgram, "sunColorU2"), 1, value_ptr(sunColorU2));
+        glUniform1f(glGetUniformLocation(computeShaderProgram, "time"), (float)glfwGetTime());
         
         glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
 
@@ -739,10 +547,10 @@ static bool readPPM(const std::string& filename, std::vector<unsigned char>& buf
 // MAIN
 // ============================================================================
 int main(int argc, char** argv) {
-    bool interactive = false;
+    bool predefinedPath = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--interactive" || a == "-i") interactive = true;
+        if (a == "--predefined" || a == "-p") predefinedPath = true;
     }
     Engine engine;
     
@@ -754,26 +562,28 @@ int main(int argc, char** argv) {
     
     // Create two distinct UNIVERSES
     cout << "\n=== WORMHOLE PORTAL SIMULATION ===\n\n";
-    
-    // UNIVERSE 1: SPHERES with RGB colors (you start here!)
-    spheres.push_back(Sphere(vec3(-80, 40, 0), 10, vec3(1.0f, 0.2f, 0.2f)));    // Red
-    spheres.push_back(Sphere(vec3(-80, -40, 0), 10, vec3(0.2f, 1.0f, 0.2f)));   // Green
-    spheres.push_back(Sphere(vec3(-100, 0, 50), 10, vec3(0.2f, 0.2f, 1.0f)));    // Blue
-    spheres.push_back(Sphere(vec3(-120, 0, 0), 12, vec3(1.0f, 0.5f, 0.0f)));     // Orange
-    
-    // UNIVERSE 2: CUBES with CMY colors (visible ONLY through portal!)
-    cubes.push_back(Cube(vec3(80, 40, 0), 18, vec3(1.0f, 1.0f, 0.2f)));     // Yellow
-    cubes.push_back(Cube(vec3(80, -40, 0), 18, vec3(1.0f, 0.2f, 1.0f)));    // Magenta
-    cubes.push_back(Cube(vec3(100, 0, 50), 18, vec3(0.2f, 1.0f, 1.0f)));     // Cyan
-    cubes.push_back(Cube(vec3(120, 0, 0), 22, vec3(1.0f, 1.0f, 1.0f)));      // White
+
+    // Universe 1 Objects
+    spheres.push_back(Sphere(vec3(0, 5000, -6000), 1000, vec3(1.0f, 0.9f, 0.7f), true, 1));      // Yellow Sun
+    spheres.push_back(Sphere(vec3(-80, 40, 0), 10, vec3(1.0f, 0.2f, 0.2f), false, 1));   // Red Planet
+    spheres.push_back(Sphere(vec3(-80, -40, 0), 10, vec3(0.2f, 1.0f, 0.2f), false, 1));  // Green Planet
+    spheres.push_back(Sphere(vec3(-100, 0, 50), 10, vec3(0.2f, 0.2f, 1.0f), false, 1));   // Blue Planet
+    spheres.push_back(Sphere(vec3(-120, 0, 0), 12, vec3(1.0f, 0.5f, 0.0f), false, 1));    // Orange Planet
+
+    // Universe 2 Objects
+    spheres.push_back(Sphere(vec3(0, -7000, 8000), 1500, vec3(0.7f, 0.8f, 1.0f), true, 2));     // Blue Giant Sun
+    spheres.push_back(Sphere(vec3(80, 40, 0), 18, vec3(1.0f, 1.0f, 0.2f), false, 2));      // Yellow Planet
+    spheres.push_back(Sphere(vec3(80, -40, 0), 18, vec3(1.0f, 0.2f, 1.0f), false, 2));     // Magenta Planet
+    spheres.push_back(Sphere(vec3(100, 0, 50), 18, vec3(0.2f, 1.0f, 1.0f), false, 2));      // Cyan Planet
+    spheres.push_back(Sphere(vec3(120, 0, 0), 22, vec3(1.0f, 1.0f, 1.0f), false, 2));       // White Planet
     
     currentUniverse = 1;  // Start in Universe 1 (spheres)
     
     generateStars(1000); // Generate stars BEFORE uploading data
     engine.uploadSceneData(); // NOW we upload the data, after it's created
 
-    cout << "Universe 1 (Current): " << spheres.size() << " SPHERES (RGB colors)\n";
-    cout << "Universe 2 (Through throat): " << cubes.size() << " CUBES (CMY colors)\n";
+    cout << "Universe 1 (Current): " << spheres.size() << " Objects\n";
+    cout << "Universe 2 (Through throat): " << spheres.size() << " Objects\n";
     cout << "\nWormhole Throat: " << THROAT_RADIUS << " unit radius SPHERE at origin\n";
     cout << "Light Bending: ENABLED (Refraction-based Lensing)\n";
     cout << "Visuals: ADDED Starfield, Fresnel Glow, Specular Highlights\n";
@@ -785,7 +595,8 @@ int main(int argc, char** argv) {
     cout << "  Shift + Left Drag: Pan camera\n";
     cout << "  Mouse Scroll: Zoom in/out\n";
     cout << "  W/A/S/D: Move camera\n";
-    cout << "  Space/Shift+Space: Move up/down\n";
+    cout << "  Shift: Move up\n";
+    cout << "  Space: Move down\n";
     cout << "  U: Switch universe\n";
     cout << "  ESC: Exit\n\n";
     
@@ -796,15 +607,49 @@ int main(int argc, char** argv) {
     cout << "  - SMOOTH, high-quality rendering (due to anti-aliasing)\n";
     cout << "  - Objects will appear DISTORTED through the throat\n\n";
     
-    if (interactive) {
-        cout << "Rendering (interactive)... Use -i command line flag to switch modes.\n";
+    // Store initial state for animation
+    const auto initialSpheres = spheres;
+
+    if (!predefinedPath) {
+        cout << "Rendering (interactive)... Use -p or --predefined to switch modes.\n";
         int frameCount = 0;
         double lastTime = glfwGetTime();
-
-        while (!glfwWindowShouldClose(engine.window)) {
+    
+    while (!glfwWindowShouldClose(engine.window)) {
             processInput(engine.window);
-            engine.render();
 
+            // Animate planets
+            double time = glfwGetTime();
+            for (size_t i = 0; i < spheres.size(); ++i) {
+                bool isEmissive = initialSpheres[i].properties.x > 0.5f;
+                if (!isEmissive) {
+                    vec3 initialPos = vec3(initialSpheres[i].centerAndRadius);
+                    
+                    int universeID = int(initialSpheres[i].properties.y);
+                    vec3 rotation_axis = (universeID == 1) ? vec3(0.0, 1.0, 0.0) : vec3(0.1, 1.0, 0.0);
+                    float orbit_radius = length(vec3(initialPos.x, 0.0, initialPos.z));
+                    float speed_factor = 150.0f;
+                    float angular_velocity = 10.0f / (orbit_radius + speed_factor);
+
+                    float angle = time * angular_velocity;
+                    
+                    // Reverse direction for universe 2
+                    if (universeID == 2) {
+                        angle = -angle;
+                    }
+
+                    glm::mat4 rotation_matrix = glm::rotate(glm::mat4(1.0f), angle, normalize(rotation_axis));
+                    vec3 new_pos = vec3(rotation_matrix * vec4(initialPos, 1.0f));
+                    
+                    spheres[i].centerAndRadius.x = new_pos.x;
+                    spheres[i].centerAndRadius.y = new_pos.y;
+                    spheres[i].centerAndRadius.z = new_pos.z;
+                }
+            }
+            engine.updateSpheresSSBO();
+
+        engine.render();
+        
             // FPS Counter
             frameCount++;
             double currentTime = glfwGetTime();
@@ -812,7 +657,7 @@ int main(int argc, char** argv) {
             if (elapsedTime >= 1.0) {
                 double fps = double(frameCount) / elapsedTime;
                 std::stringstream ss;
-                ss << "Wormhole Simulation | " << spheres.size() << " Spheres, " << cubes.size() << " Cubes | FPS: " << std::fixed << std::setprecision(1) << fps;
+                ss << "Wormhole Simulation | " << spheres.size() << " Objects | FPS: " << std::fixed << std::setprecision(1) << fps;
                 glfwSetWindowTitle(engine.window, ss.str().c_str());
                 
                 frameCount = 0;
@@ -824,8 +669,8 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // Movie mode (default): precompute frames, then play back
-    cout << "Movie mode: precomputing frames...\n";
+    // Movie mode (if flag is set): precompute frames, then play back
+    cout << "Predefined path mode: precomputing frames...\n";
     std::vector<Keyframe> keys;
     std::string pathFile = "camera_path.txt";
     if (!loadCameraPath(pathFile, keys)) {

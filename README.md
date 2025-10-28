@@ -151,7 +151,7 @@ cmake --build build
 ### What You'll See
 
 From the entrance side, you can see:
-1. Colored spheres in your local universe
+1. Colored spheres, suns, and custom loaded models in your local universe
 2. The wormhole throat (dark region at center)
 3. Distorted view of the exit universe through the throat
 4. Gravitational lensing effects around the throat
@@ -160,20 +160,27 @@ From the entrance side, you can see:
 
 After building, you'll have three executables:
 
-- **WormholeSim**: Main wormhole simulation (NEW)
+- **WormholeSim**: Main wormhole simulation with GPU-accelerated ray tracing. Supports interactive and cinematic movie modes.
 - **Wormhole3D**: Legacy black hole with accretion disk
 - **Wormhole2D**: 2D gravitational lensing demo
+
+### New Features
+- **GPU Accelerated Ray Tracing**: Uses a compute shader to leverage the power of the GPU for massive performance gains.
+- **Cinematic Movie Mode**: Automatically generates a video from a predefined camera path, saving timestamped renders and the final `.mp4` video to the `exports/` directory.
+- **Real-time Interactive Mode**: Fly through the scene with WASD controls and mouse-look, with a real-time FPS counter in the window title.
+- **OBJ Model Loading**: Load custom 3D models in the `.obj` format into the simulation. A sample `spaceship.obj` is included.
+- **Enhanced Visuals**: The simulation now includes procedural suns and a multi-colored, variable-size starfield for a more immersive experience.
 
 ## Technical Details
 
 ### Code Structure
 
 - `wormhole_sim.cpp`: Main wormhole simulation
-  - Morris-Thorne metric implementation
-  - Geodesic integration (RK4)
-  - Two-universe scene management
-  - Ray-object intersection
-  
+  - Controls CPU-side logic, scene setup, and input.
+  - Manages GPU buffers and dispatches the compute shader.
+- `wormhole.comp`: GPU compute shader
+  - Performs all ray tracing, intersection tests (sphere, cube, triangle), and lighting calculations in parallel.
+- `tiny_obj_loader.h`: A header-only library used for loading `.obj` models.
 - `wormhole.cpp`: Legacy black hole with compute shaders
 - `2D_lensing.cpp`: 2D Schwarzschild lensing
 - `geodesic.comp`: GPU-accelerated geodesic computation
@@ -202,6 +209,7 @@ This simulation uses:
 - ✅ Proper coordinate transformations
 
 Limitations:
+- ⚠️ **Visual Approximation of Lensing**: The gravitational lensing is achieved through a simplified refraction effect in the shader, not a full integration of null geodesics for the Morris-Thorne metric. This provides a visually compelling and fast approximation but is not physically rigorous.
 - ⚠️ Simplified intersection tests (assumes objects are small)
 - ⚠️ No gravitational redshift/blueshift
 - ⚠️ No Doppler effects from motion
@@ -239,3 +247,54 @@ Feel free to open issues or submit pull requests with improvements!
 ## Acknowledgments
 
 Built upon the original black hole simulation framework. Extended with wormhole physics based on the pioneering work of Morris, Thorne, and Visser.
+
+## Running the Simulation
+
+The project is built using CMake. Once compiled, you can run the simulation from the project's root directory.
+
+### Executable
+
+The main executable is `WormholeSim.exe` (located in `build/Release/`).
+
+### Modes
+
+*   **Interactive Mode (Default)**: Simply run the executable to start in interactive mode.
+    ```bash
+    ./build/Release/WormholeSim.exe
+    ```
+*   **Predefined Path Mode**: Use the `-p` or `--predefined` flag to run the cinematic movie mode. This will render a video file (`.mp4`) to the `exports/` directory.
+    ```bash
+    ./build/Release/WormholeSim.exe -p
+    ```
+
+### Controls (Interactive Mode)
+
+*   **Left Mouse Drag**: Orbit camera
+*   **Shift + Left Drag**: Pan camera
+*   **Mouse Scroll**: Zoom in/out
+*   **W/A/S/D**: Move camera forward/left/back/right
+*   **Shift**: Move camera up
+*   **Space**: Move camera down
+*   **U**: Switch between Universe 1 and Universe 2
+*   **ESC**: Exit the simulation
+
+## Sharing with Friends
+
+To share the simulation, you can send them the `WormholeSim_dist.zip` file.
+
+### Contents of the Package
+
+*   `WormholeSim.exe`: The main application.
+*   `wormhole.comp`: The required GPU shader file.
+*   `camera_path.txt`: The camera path for the predefined movie mode.
+
+**Important**: All three files must be kept in the same folder for the simulation to work correctly.
+
+### System Requirements
+
+*   A modern, OpenGL 4.3 compatible graphics card (most GPUs from the last ~8 years).
+*   Windows operating system.
+
+---
+
+This project was developed as a demonstration of advanced real-time graphics techniques.

@@ -1,13 +1,26 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.10)
+
+# Set the vcpkg toolchain file BEFORE the project() command.
+# This is the most robust method.
+if(NOT CMAKE_TOOLCHAIN_FILE)
+    set(CMAKE_TOOLCHAIN_FILE ${CMAKE_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake CACHE STRING "Vcpkg toolchain file")
+endif()
+
 project(WormholeSim)
 
+# Statically link the Visual C++ runtime library for easy distribution
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+
+# Set the C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Dependencies
 find_package(GLEW REQUIRED)
-find_package(glfw3 CONFIG REQUIRED)
-find_package(glm CONFIG REQUIRED)
+find_package(glfw3 REQUIRED)
+find_package(glm REQUIRED)
 find_package(OpenGL REQUIRED)
 
 # Common dependencies
