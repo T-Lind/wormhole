@@ -44,3 +44,12 @@ add_custom_command(TARGET WormholeSim POST_BUILD
             $<TARGET_FILE_DIR:WormholeSim>
 )
 
+# Physically-accurate CPU geodesic simulation
+add_executable(WormholeGeodesic wormhole_geodesic.cpp)
+target_link_libraries(WormholeGeodesic PRIVATE ${DEPS})
+target_include_directories(WormholeGeodesic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(WormholeGeodesic PRIVATE OpenMP::OpenMP_CXX)
+endif()
+
