@@ -59,8 +59,10 @@ struct alignas(16) Camera {
     bool panning = false;
     float lastX = 0, lastY = 0;
 
-    Camera() : position(0, 0, 80.0f), target(0, 0, 0), up(0, 1, 0), 
-               fov(60.0f), azimuth(0), elevation((float)M_PI / 2.0f), radius(80.0f) {}
+    Camera() : position(0, 0, 120.0f), target(0, 0, 0), up(0, 1, 0), 
+               fov(60.0f), azimuth((float)M_PI / 4.0f), elevation(1.1f), radius(120.0f) {
+        updatePosition();
+    }
 
     void updatePosition() {
         position.x = target.x + radius * sin(elevation) * cos(azimuth);
