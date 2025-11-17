@@ -151,3 +151,14 @@ vcpkg_installed
 
 exports/
 AGENTS.md
+
+### BROKK'S CONFIGURATION ###
+.brokk/**
+/.brokk/workspace.properties
+/.brokk/sessions/
+/.brokk/dependencies/
+/.brokk/history.zip
+!AGENTS.md
+!.brokk/style.md
+!.brokk/review.md
+!.brokk/project.properties
