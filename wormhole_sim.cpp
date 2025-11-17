@@ -188,6 +188,48 @@ void generateStars(int count) {
     }
 }
 
+// Helper functions to build solar systems while keeping spheres and orbits vectors aligned
+// Each function adds a Sphere and corresponding Orbit entry, returning the sphere's index
+
+// Add a sun at origin (0,0,0) for the given universe
+static int addSun(int universe, float radius, vec3 color) {
+    spheres.push_back(Sphere(vec3(0, 0, 0), radius, color, true, universe));
+    orbits.push_back({-2, universe, 0.0f, 0.0f, 0.0f, 0.0f}); // parentIndex -2: no orbit (sun)
+    return (int)spheres.size() - 1;
+}
+
+// Add a planet orbiting its universe's sun
+// Computes initial position at t=0 based on orbit parameters for visual placement
+static int addPlanet(int universe, float orbitRadius, float angularSpeed, 
+                     float inclinationDeg, float phaseDeg, float radius, vec3 color) {
+    float angle = radians(phaseDeg);
+    vec3 pos = vec3(orbitRadius * cos(angle), 0.0f, orbitRadius * sin(angle));
+    mat4 inc = rotate(mat4(1.0f), radians(inclinationDeg), vec3(1, 0, 0));
+    pos = vec3(inc * vec4(pos, 1.0f));
+    
+    spheres.push_back(Sphere(pos, radius, color, false, universe));
+    orbits.push_back({-1, universe, orbitRadius, angularSpeed, inclinationDeg, phaseDeg}); // parentIndex -1: orbit sun
+    return (int)spheres.size() - 1;
+}
+
+// Add a moon orbiting the given parent planet
+// Computes initial position relative to parent based on orbit parameters
+static int addMoon(int parentIndex, int universe, float orbitRadius, float angularSpeed,
+                   float inclinationDeg, float phaseDeg, float radius, vec3 color) {
+    vec3 parentPos = vec3(spheres[parentIndex].centerAndRadius);
+    
+    float angle = radians(phaseDeg);
+    vec3 relPos = vec3(orbitRadius * cos(angle), 0.0f, orbitRadius * sin(angle));
+    mat4 inc = rotate(mat4(1.0f), radians(inclinationDeg), vec3(1, 0, 0));
+    relPos = vec3(inc * vec4(relPos, 1.0f));
+    
+    vec3 pos = parentPos + relPos;
+    
+    spheres.push_back(Sphere(pos, radius, color, false, universe));
+    orbits.push_back({parentIndex, universe, orbitRadius, angularSpeed, inclinationDeg, phaseDeg});
+    return (int)spheres.size() - 1;
+}
+
 //------------------------------------------------------------------------------
 // gpu renderer
 //------------------------------------------------------------------------------
@@ -688,48 +730,39 @@ int main(int argc, char** argv) {
     
     cout << "\nwormhole simulation\n\n";
 
-    spheres.push_back(Sphere(vec3(0, 5000, -6000), 1000, vec3(1.0f, 0.9f, 0.7f), true, 1));
-    spheres.push_back(Sphere(vec3(-80, 40, 0), 10, vec3(1.0f, 0.2f, 0.2f), false, 1));
-    spheres.push_back(Sphere(vec3(-80, -40, 0), 10, vec3(0.2f, 1.0f, 0.2f), false, 1));
-    spheres.push_back(Sphere(vec3(-100, 0, 50), 10, vec3(0.2f, 0.2f, 1.0f), false, 1));
-    spheres.push_back(Sphere(vec3(-120, 0, 0), 12, vec3(1.0f, 0.5f, 0.0f), false, 1));
-
-    spheres.push_back(Sphere(vec3(0, -7000, 8000), 1500, vec3(0.7f, 0.8f, 1.0f), true, 2));
-    spheres.push_back(Sphere(vec3(80, 40, 0), 18, vec3(1.0f, 1.0f, 0.2f), false, 2));
-    spheres.push_back(Sphere(vec3(80, -40, 0), 18, vec3(1.0f, 0.2f, 1.0f), false, 2));
-    spheres.push_back(Sphere(vec3(100, 0, 50), 18, vec3(0.2f, 1.0f, 1.0f), false, 2));
-    spheres.push_back(Sphere(vec3(120, 0, 0), 22, vec3(1.0f, 1.0f, 1.0f), false, 2));
-    
-    // Initialize orbits parallel to spheres vector
-    // parentIndex: -1 = orbit around universe sun, >= 0 = orbit around spheres[parentIndex] (moon), < -1 = no orbit
+    // Build two compact solar systems using helper functions
+    // This keeps spheres and orbits vectors aligned automatically
+    spheres.clear();
     orbits.clear();
-    orbits.reserve(spheres.size());
+    spheres.reserve(32);
+    orbits.reserve(32);
 
-    // Index 0: U1 sun (no orbit)
-    orbits.push_back({-2, 1, 0.0f, 0.0f, 0.0f, 0.0f});
+    // Universe 1: Yellow sun with 4 planets and 3 moons
+    int u1_sun = addSun(1, 5.0f, vec3(1.0f, 0.9f, 0.7f));
+    int u1_p1 = addPlanet(1, 12.0f, 0.35f, 1.5f, 0.0f, 0.9f, vec3(0.95f, 0.4f, 0.25f));
+    addMoon(u1_p1, 1, 1.5f, 1.2f, 5.0f, 45.0f, 0.30f, vec3(0.7f, 0.7f, 0.7f));
+    int u1_p2 = addPlanet(1, 22.0f, 0.22f, 3.5f, 90.0f, 1.2f, vec3(0.3f, 0.8f, 0.3f));
+    addMoon(u1_p2, 1, 2.0f, 0.9f, 8.0f, 120.0f, 0.40f, vec3(0.6f, 0.6f, 0.6f));
+    int u1_p3 = addPlanet(1, 35.0f, 0.14f, 6.0f, 180.0f, 1.5f, vec3(0.3f, 0.4f, 0.9f));
+    addMoon(u1_p3, 1, 2.5f, 0.75f, 12.0f, 210.0f, 0.35f, vec3(0.8f, 0.7f, 0.6f));
+    int u1_p4 = addPlanet(1, 48.0f, 0.09f, 2.5f, 270.0f, 1.8f, vec3(0.9f, 0.6f, 0.2f));
 
-    // U1 planets (indices 1..4): orbit around U1 sun
-    orbits.push_back({-1, 1, 60.0f, 0.25f, 2.0f,  10.0f});   // idx 1: fast inner planet
-    orbits.push_back({-1, 1, 85.0f, 0.18f, 5.0f, 130.0f});   // idx 2: medium speed
-    orbits.push_back({-1, 1, 110.0f, 0.12f, 8.0f, 220.0f});  // idx 3: slower
-    orbits.push_back({-1, 1, 140.0f, 0.08f, 3.0f, 300.0f});  // idx 4: slowest outer planet
+    // Universe 2: Blue sun with 4 planets and 2 moons
+    int u2_sun = addSun(2, 5.5f, vec3(0.7f, 0.8f, 1.0f));
+    int u2_p1 = addPlanet(2, 15.0f, 0.30f, 2.0f, 30.0f, 0.7f, vec3(0.9f, 0.9f, 0.3f));
+    int u2_p2 = addPlanet(2, 25.0f, 0.20f, 4.5f, 120.0f, 1.0f, vec3(0.9f, 0.3f, 0.8f));
+    addMoon(u2_p2, 2, 1.8f, 1.0f, 7.0f, 60.0f, 0.25f, vec3(0.5f, 0.5f, 0.5f));
+    int u2_p3 = addPlanet(2, 38.0f, 0.13f, 7.5f, 200.0f, 1.4f, vec3(0.3f, 0.9f, 0.9f));
+    addMoon(u2_p3, 2, 2.2f, 0.8f, 10.0f, 150.0f, 0.40f, vec3(0.7f, 0.6f, 0.5f));
+    int u2_p4 = addPlanet(2, 50.0f, 0.08f, 3.0f, 300.0f, 2.0f, vec3(0.9f, 0.9f, 0.9f));
 
-    // Index 5: U2 sun (no orbit)
-    orbits.push_back({-2, 2, 0.0f, 0.0f, 0.0f, 0.0f});
-
-    // U2 planets (indices 6..9): orbit around U2 sun
-    orbits.push_back({-1, 2, 70.0f, 0.22f, 4.0f,  30.0f});   // idx 6
-    orbits.push_back({-1, 2, 100.0f, 0.15f, 6.0f, 160.0f});  // idx 7
-    orbits.push_back({-1, 2, 130.0f, 0.10f, 9.0f, 250.0f});  // idx 8
-    orbits.push_back({-1, 2, 170.0f, 0.06f, 5.0f, 330.0f});  // idx 9
-    
     currentUniverse = 1;
     
     generateStars(1000);
     engine.uploadSceneData();
 
-    cout << "universe 1 has a yellow sun and " << 4 << " planets.\n";
-    cout << "universe 2 has a blue sun and " << 4 << " planets.\n";
+    cout << "universe 1 has a yellow sun with 4 planets and 3 moons.\n";
+    cout << "universe 2 has a blue sun with 4 planets and 2 moons.\n";
     
     const auto initialSpheres = spheres;
 
