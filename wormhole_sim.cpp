@@ -28,6 +28,9 @@ extern "C" {
 #define M_PI 3.14159265358979323846
 #endif
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 using namespace glm;
 using namespace std;
 
@@ -484,12 +487,6 @@ static void setCamera(const vec3& pos, const vec3& target) {
     camera.elevation = acos(dir.y / camera.radius);
 }
 
-static void writePPM(const string& filename, const vector<unsigned char>& buf, int w, int h) {
-    ofstream out(filename, ios::binary);
-    out << "P6\n" << w << " " << h << "\n255\n";
-    out.write(reinterpret_cast<const char*>(buf.data()), static_cast<streamsize>(w*h*3));
-}
-
 //------------------------------------------------------------------------------
 // main loop modes
 //------------------------------------------------------------------------------
@@ -597,25 +594,25 @@ void runMovieMode(Engine& engine) {
 
         engine.computePixels();
         ostringstream name;
-        name << exportDir << "/frame_" << setw(5) << setfill('0') << i << ".ppm";
+        name << exportDir << "/frame_" << setw(5) << setfill('0') << i << ".png";
         string file = name.str();
 
         vector<float> gpu_pixels(WIDTH * HEIGHT * 4);
         glBindTexture(GL_TEXTURE_2D, engine.texture);
         glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, gpu_pixels.data());
 
-        vector<unsigned char> ppm_pixels(WIDTH * HEIGHT * 3);
+        vector<unsigned char> png_pixels(WIDTH * HEIGHT * 3);
         for(int y = 0; y < HEIGHT; ++y) {
             for(int x = 0; x < WIDTH; ++x) {
                 int flipped_y = HEIGHT - 1 - y;
                 int gpu_idx = (y * WIDTH + x) * 4;
-                int ppm_idx = (flipped_y * WIDTH + x) * 3;
-                ppm_pixels[ppm_idx + 0] = static_cast<unsigned char>(glm::clamp(gpu_pixels[gpu_idx + 0], 0.0f, 1.0f) * 255);
-                ppm_pixels[ppm_idx + 1] = static_cast<unsigned char>(glm::clamp(gpu_pixels[gpu_idx + 1], 0.0f, 1.0f) * 255);
-                ppm_pixels[ppm_idx + 2] = static_cast<unsigned char>(glm::clamp(gpu_pixels[gpu_idx + 2], 0.0f, 1.0f) * 255);
+                int png_idx = (flipped_y * WIDTH + x) * 3;
+                png_pixels[png_idx + 0] = static_cast<unsigned char>(glm::clamp(gpu_pixels[gpu_idx + 0], 0.0f, 1.0f) * 255);
+                png_pixels[png_idx + 1] = static_cast<unsigned char>(glm::clamp(gpu_pixels[gpu_idx + 1], 0.0f, 1.0f) * 255);
+                png_pixels[png_idx + 2] = static_cast<unsigned char>(glm::clamp(gpu_pixels[gpu_idx + 2], 0.0f, 1.0f) * 255);
             }
         }
-        writePPM(file, ppm_pixels, WIDTH, HEIGHT);
+        stbi_write_png(file.c_str(), WIDTH, HEIGHT, 3, png_pixels.data(), WIDTH * 3);
         
         cout << "saved frame " << (i + 1) << "/" << totalFrames << "\r" << flush;
     }
@@ -624,7 +621,7 @@ void runMovieMode(Engine& engine) {
     cout << "running ffmpeg to create video...\n";
     string videoFile = ss.str() + ".mp4";
     string ffmpeg_cmd = "ffmpeg -r " + to_string(MOVIE_FPS) 
-                           + " -i " + exportDir + "/frame_%05d.ppm"
+                           + " -i " + exportDir + "/frame_%05d.png"
                            + " -c:v libx264 -pix_fmt yuv420p -y " + videoFile;
 
     int ffmpeg_ret = system(ffmpeg_cmd.c_str());

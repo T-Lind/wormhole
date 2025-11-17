@@ -146,16 +146,8 @@ _deps
 # Vcpkg
 vcpkg_installed
 
-### BROKK'S CONFIGURATION ###
-.brokk/**
-/.brokk/workspace.properties
-/.brokk/sessions/
-/.brokk/dependencies/
-/.brokk/history.zip
-!.brokk/style.md
-!.brokk/review.md
-!.brokk/project.properties
 
-.brokk/
+.*/
 
 exports/
+AGENTS.md

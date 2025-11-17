@@ -1,47 +1,35 @@
 # wormhole
 
-This is a real-time simulation of a traversable wormhole. It's all running on the gpu with a compute shader, which makes it fast enough to be interactive.
+A real-time, interactive simulation of a traversable wormhole, rendered with a GPU compute shader.
 
-The whole idea is to show what it might look like to approach a morris-thorne wormhole, which is basically a tunnel connecting two different places in spacetime. I've set up two unique little universes, each with some planets and a sun. You can see from one universe into the other through the wormhole's throat, and the view is distorted by a gravitational lensing effect.
+The simulation places you in one of two distinct universes, each with its own sun and planetary system. The wormhole's throat acts as a window between them, distorting the view with a gravitational lensing effect.
 
-It's not perfectly, scientifically accurate. the lensing is a visual approximation (using a refraction effect in the shader) instead of a full general relativity calculation. This is a tradeoff to get it running in real-time.
+The lensing is achieved by treating the wormhole's throat as a refractive sphere. When a view ray intersects the throat, its direction is bent based on its distance from the center, mimicking the path light would take through curved spacetime. The ray then continues into the other universe. This method produces a compelling visual distortion while keeping the simulation fast enough for real-time interaction.
 
-### Building the project
+### Building
 
-You'll need a c++17 compiler, cmake, and vcpkg. your graphics card should also support opengl 4.3.
+You'll need a C++17 compiler, CMake, and vcpkg. Your graphics card must support OpenGL 4.3.
 
-First, clone the repo. then, run `vcpkg install` to get the dependencies.
+First, clone the repo, then run `vcpkg install` to get the dependencies (glew, glfw, glm).
 
-After that, you can configure and build with cmake. you just need to point it to the vcpkg toolchain file.
+After that, configure and build with CMake, pointing it to the vcpkg toolchain file.
 
 ```bash
 cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build
 ```
 
-### Running it
+### Running
 
-The main program is `WormholeSim` inside the `build` directory.
+The program is `WormholeSim.exe` inside the `build/Debug` directory. Running it starts the interactive mode.
 
-Running it by itself starts the interactive mode. you can fly around with the mouse and keyboard.
+**Controls:**
+- `wasd`: Move forward/back/strafe
+- `shift` / `space`: Move up / down
+- `mouse drag`: Orbit camera
+- `shift` + `mouse drag`: Pan camera
+- `mouse scroll`: Zoom
+- `u`: Switch universes
+- `esc`: Quit
 
-Controls:
-wasd: move around
-shift / space: move up / down
-mouse drag: orbit camera
-shift + mouse drag: pan camera
-mouse scroll: zoom
-u: switch universes
-esc: quit
-
-If you want to render the cinematic video, run it with the `-p` flag. It will use the `camera_path.txt` file to create a video in the `exports` directory. This needs ffmpeg to be installed on your system to create the mp4 automatically. If it's not, the program will just save all the frames as images and tell you the command to stitch them together yourself.
-
-### The physically accurate renderer
-
-This project also includes a second program, `WormholeGeodesic`.
-
-Unlike the main simulation, which uses a fast visual approximation for lensing, this program is a non-interactive, cpu-based renderer that calculates the actual curved path of light by numerically solving the geodesic equations of general relativity.
-
-It is extremely slow but produces a physically accurate image. it renders a single frame from a fixed camera position and saves it to the `exports` directory.
-
-It's still a buggy WIP, sorry.
+To render the cinematic video defined in `camera_path.txt`, run the program with the `-p` flag. It will save a video to the `exports` directory. This requires `ffmpeg` to be installed and in your system's PATH. If `ffmpeg` isn't found, the program will save the individual frames and print the command for you to run manually.
