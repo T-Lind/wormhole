@@ -149,8 +149,20 @@ struct alignas(16) Star {
     vec4 colorAndSize;
 };
 
+// CPU-only orbit parameters for hierarchical orbital mechanics
+// Indexed parallel to spheres vector
+struct Orbit {
+    int parentIndex;      // -1: orbit around universe's sun at origin, >= 0: orbit around spheres[parentIndex] (moon)
+    int universe;         // 1 or 2
+    float radius;         // orbital radius from parent
+    float angularSpeed;   // radians per second
+    float inclinationDeg; // orbital plane tilt in degrees
+    float phaseDeg;       // initial phase offset in degrees
+};
+
 vector<Sphere> spheres;
 vector<Star> stars;
+vector<Orbit> orbits;
 
 void generateStars(int count) {
     for (int i = 0; i < count; i++) {
