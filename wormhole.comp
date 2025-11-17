@@ -20,8 +20,8 @@ struct Sphere {
 };
 
 struct Star {
-    vec4 data; // .xyz = direction, .w = brightness
-    vec4 colorAndSize; // .xyz = color, .w = size
+    vec4 data;
+    vec4 colorAndSize;
 };
 
 layout(std430, binding = 1) buffer SphereBuffer {
@@ -61,7 +61,6 @@ float noise(vec2 st) {
 float fbm(vec2 st) {
     float value = 0.0;
     float amplitude = 0.5;
-    float frequency = 0.0;
     for (int i = 0; i < 6; i++) {
         value += amplitude * noise(st);
         st *= 2.0;

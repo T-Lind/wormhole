@@ -1,12 +1,12 @@
 #ifdef _WIN32
 #include <windows.h>
-#endif
 
 // Force dedicated GPU on laptops
 extern "C" {
   __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
   __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
+#endif
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -16,11 +16,9 @@ extern "C" {
 #include <vector>
 #include <iostream>
 #include <cmath>
-#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
-#include <thread>
 #include <chrono>
 #include <iomanip>
 #define _USE_MATH_DEFINES
@@ -34,18 +32,12 @@ extern "C" {
 using namespace glm;
 using namespace std;
 
-//------------------------------------------------------------------------------
-// constants
-//------------------------------------------------------------------------------
 const int WIDTH = 800;
 const int HEIGHT = 600;
 const int MOVIE_FPS = 24;
 
 int currentUniverse = 1;
 
-//------------------------------------------------------------------------------
-// camera
-//------------------------------------------------------------------------------
 struct alignas(16) Camera {
     vec3 position;
     float _pad1;
@@ -96,9 +88,6 @@ struct alignas(16) Camera {
 
 Camera camera;
 
-//------------------------------------------------------------------------------
-// input handling
-//------------------------------------------------------------------------------
 void processInput(GLFWwindow* window) {
     float cameraSpeed = 2.5f;
     vec3 forward = normalize(camera.target - camera.position);
@@ -131,9 +120,6 @@ void processInput(GLFWwindow* window) {
     }
 }
 
-//------------------------------------------------------------------------------
-// scene objects
-//------------------------------------------------------------------------------
 struct alignas(16) Sphere {
     vec4 centerAndRadius;
     vec4 color;
@@ -151,8 +137,6 @@ struct alignas(16) Star {
     vec4 colorAndSize;
 };
 
-// CPU-only orbit parameters for hierarchical orbital mechanics
-// Indexed parallel to spheres vector
 struct Orbit {
     int parentIndex;      // -1: orbit around universe's sun at origin, >= 0: orbit around spheres[parentIndex] (moon)
     int universe;         // 1 or 2
@@ -232,15 +216,11 @@ static int addMoon(int parentIndex, int universe, float orbitRadius, float angul
     return (int)spheres.size() - 1;
 }
 
-//------------------------------------------------------------------------------
-// gpu renderer
-//------------------------------------------------------------------------------
 struct Engine {
     GLFWwindow* window;
     GLuint quadVAO, quadVBO;
     GLuint texture;
     GLuint shaderProgram;
-    vector<unsigned char> pixels;
 
     GLuint computeShaderProgram;
     GLuint cameraUBO;
@@ -248,7 +228,6 @@ struct Engine {
     GLuint starsSSBO;
     
     Engine() {
-        pixels.resize(WIDTH * HEIGHT * 3);
         initGLFW();
         initShaders();
         initQuad();
@@ -466,9 +445,6 @@ struct Engine {
     }
 };
 
-//------------------------------------------------------------------------------
-// callbacks and helpers
-//------------------------------------------------------------------------------
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(window, true);
@@ -544,10 +520,7 @@ static void setCamera(const vec3& pos, const vec3& target) {
     camera.elevation = acos(dir.y / camera.radius);
 }
 
-//------------------------------------------------------------------------------
-// main loop modes
-//------------------------------------------------------------------------------
-void runInteractiveMode(Engine& engine, const vector<Sphere>& initialSpheres) {
+void runInteractiveMode(Engine& engine) {
     cout << "starting interactive mode... (use -p for movie mode)\n";
     int frameCount = 0;
     double lastTime = glfwGetTime();
@@ -714,9 +687,6 @@ void runMovieMode(Engine& engine) {
     }
 }
 
-//------------------------------------------------------------------------------
-// main
-//------------------------------------------------------------------------------
 int main(int argc, char** argv) {
     bool predefinedPath = false;
     for (int i = 1; i < argc; ++i) {
@@ -766,12 +736,10 @@ int main(int argc, char** argv) {
     cout << "universe 1 has a yellow sun with 4 planets and 3 moons.\n";
     cout << "universe 2 has a blue sun with 4 planets and 2 moons.\n";
     
-    const auto initialSpheres = spheres;
-
     if (predefinedPath) {
         runMovieMode(engine);
     } else {
-        runInteractiveMode(engine, initialSpheres);
+        runInteractiveMode(engine);
     }
 
     cout << "\nsimulation ended.\n";
