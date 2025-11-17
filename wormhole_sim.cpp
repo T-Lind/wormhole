@@ -226,6 +226,8 @@ struct Engine {
     GLuint cameraUBO;
     GLuint spheresSSBO;
     GLuint starsSSBO;
+    int renderWidth;
+    int renderHeight;
     
     Engine() {
         initGLFW();
@@ -252,13 +254,19 @@ struct Engine {
         }
         
         glfwMakeContextCurrent(window);
+        glfwSetWindowUserPointer(window, this);
         glewExperimental = GL_TRUE;
         
         if (glewInit() != GLEW_OK) {
             cerr << "failed to initialize glew\n";
             exit(EXIT_FAILURE);
         }
-        
+        int fbw = 0, fbh = 0;
+        glfwGetFramebufferSize(window, &fbw, &fbh);
+        renderWidth = (fbw > 0) ? fbw : WIDTH;
+        renderHeight = (fbh > 0) ? fbh : HEIGHT;
+        glViewport(0, 0, renderWidth, renderHeight);
+
         cout << "opengl " << glGetString(GL_VERSION) << "\n";
     }
     
@@ -383,7 +391,15 @@ struct Engine {
         glBindTexture(GL_TEXTURE_2D, texture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, WIDTH, HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, renderWidth, renderHeight, 0, GL_RGBA, GL_FLOAT, NULL);
+    }
+
+    void resize(int width, int height) {
+        if (width <= 0 || height <= 0) return;
+        renderWidth = width;
+        renderHeight = height;
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, renderWidth, renderHeight, 0, GL_RGBA, GL_FLOAT, NULL);
     }
     
     void computePixels() {
@@ -425,7 +441,9 @@ struct Engine {
         
         glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
 
-        glDispatchCompute(WIDTH / 8, HEIGHT / 8, 1);
+        int groupsX = (renderWidth + 7) / 8;
+        int groupsY = (renderHeight + 7) / 8;
+        glDispatchCompute(groupsX, groupsY, 1);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
     }
 
@@ -489,6 +507,14 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     camera.zoom((float)yoffset);
 }
 
+void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
+    glViewport(0, 0, width, height);
+    auto* engine = static_cast<Engine*>(glfwGetWindowUserPointer(window));
+    if (engine) {
+        engine->resize(width, height);
+    }
+}
+
 struct Keyframe {
     float timeSec;
     float posAzimuthDeg;
@@ -520,6 +546,56 @@ static void setCamera(const vec3& pos, const vec3& target) {
     camera.elevation = acos(dir.y / camera.radius);
 }
 
+void updateOrbitalPositions(double time) {
+    // First pass: update all bodies orbiting suns (parentIndex == -1)
+    for (size_t i = 0; i < spheres.size(); ++i) {
+        if (i >= orbits.size()) continue;
+        
+        const Orbit& orbit = orbits[i];
+        if (orbit.parentIndex != -1) continue;
+        
+        // Find parent (sun) position for this universe
+        vec3 parentPos = vec3(0.0f);
+        for (size_t j = 0; j < spheres.size(); ++j) {
+            bool isSun = spheres[j].properties.x > 0.5f;
+            int sunUniverse = int(spheres[j].properties.y);
+            if (isSun && sunUniverse == orbit.universe) {
+                parentPos = vec3(spheres[j].centerAndRadius);
+                break;
+            }
+        }
+        
+        // Calculate orbital position
+        float angle = radians(orbit.phaseDeg) + orbit.angularSpeed * (float)time;
+        mat4 inclinationMat = rotate(mat4(1.0f), radians(orbit.inclinationDeg), vec3(1.0f, 0.0f, 0.0f));
+        vec3 orbitPos = vec3(orbit.radius * cos(angle), 0.0f, orbit.radius * sin(angle));
+        orbitPos = vec3(inclinationMat * vec4(orbitPos, 1.0f));
+        
+        vec3 finalPos = parentPos + orbitPos;
+        spheres[i].centerAndRadius = vec4(finalPos, spheres[i].centerAndRadius.w);
+    }
+    
+    // Second pass: update all moons (parentIndex >= 0)
+    for (size_t i = 0; i < spheres.size(); ++i) {
+        if (i >= orbits.size()) continue;
+        
+        const Orbit& orbit = orbits[i];
+        if (orbit.parentIndex < 0) continue;
+        
+        // Get parent planet position
+        vec3 parentPos = vec3(spheres[orbit.parentIndex].centerAndRadius);
+        
+        // Calculate orbital position
+        float angle = radians(orbit.phaseDeg) + orbit.angularSpeed * (float)time;
+        mat4 inclinationMat = rotate(mat4(1.0f), radians(orbit.inclinationDeg), vec3(1.0f, 0.0f, 0.0f));
+        vec3 orbitPos = vec3(orbit.radius * cos(angle), 0.0f, orbit.radius * sin(angle));
+        orbitPos = vec3(inclinationMat * vec4(orbitPos, 1.0f));
+        
+        vec3 finalPos = parentPos + orbitPos;
+        spheres[i].centerAndRadius = vec4(finalPos, spheres[i].centerAndRadius.w);
+    }
+}
+
 void runInteractiveMode(Engine& engine) {
     cout << "starting interactive mode... (use -p for movie mode)\n";
     int frameCount = 0;
@@ -529,55 +605,7 @@ void runInteractiveMode(Engine& engine) {
         processInput(engine.window);
 
         double time = glfwGetTime();
-        
-        // First pass: update all bodies orbiting suns (parentIndex == -1)
-        for (size_t i = 0; i < spheres.size(); ++i) {
-            if (i >= orbits.size()) continue;
-            
-            const Orbit& orbit = orbits[i];
-            if (orbit.parentIndex != -1) continue;
-            
-            // Find parent (sun) position for this universe
-            vec3 parentPos = vec3(0.0f);
-            for (size_t j = 0; j < spheres.size(); ++j) {
-                bool isSun = spheres[j].properties.x > 0.5f;
-                int sunUniverse = int(spheres[j].properties.y);
-                if (isSun && sunUniverse == orbit.universe) {
-                    parentPos = vec3(spheres[j].centerAndRadius);
-                    break;
-                }
-            }
-            
-            // Calculate orbital position
-            float angle = radians(orbit.phaseDeg) + orbit.angularSpeed * (float)time;
-            mat4 inclinationMat = rotate(mat4(1.0f), radians(orbit.inclinationDeg), vec3(1.0f, 0.0f, 0.0f));
-            vec3 orbitPos = vec3(orbit.radius * cos(angle), 0.0f, orbit.radius * sin(angle));
-            orbitPos = vec3(inclinationMat * vec4(orbitPos, 1.0f));
-            
-            vec3 finalPos = parentPos + orbitPos;
-            spheres[i].centerAndRadius = vec4(finalPos, spheres[i].centerAndRadius.w);
-        }
-        
-        // Second pass: update all moons (parentIndex >= 0)
-        for (size_t i = 0; i < spheres.size(); ++i) {
-            if (i >= orbits.size()) continue;
-            
-            const Orbit& orbit = orbits[i];
-            if (orbit.parentIndex < 0) continue;
-            
-            // Get parent planet position
-            vec3 parentPos = vec3(spheres[orbit.parentIndex].centerAndRadius);
-            
-            // Calculate orbital position
-            float angle = radians(orbit.phaseDeg) + orbit.angularSpeed * (float)time;
-            mat4 inclinationMat = rotate(mat4(1.0f), radians(orbit.inclinationDeg), vec3(1.0f, 0.0f, 0.0f));
-            vec3 orbitPos = vec3(orbit.radius * cos(angle), 0.0f, orbit.radius * sin(angle));
-            orbitPos = vec3(inclinationMat * vec4(orbitPos, 1.0f));
-            
-            vec3 finalPos = parentPos + orbitPos;
-            spheres[i].centerAndRadius = vec4(finalPos, spheres[i].centerAndRadius.w);
-        }
-        
+        updateOrbitalPositions(time);
         engine.updateSpheresSSBO();
 
         engine.render();
@@ -619,9 +647,16 @@ void runMovieMode(Engine& engine) {
     
     cout << "rendering " << totalFrames << " frames for a " << totalDuration << "s video...\n";
 
+    // For movie mode, lock the render resolution to the base size to keep all frames consistent
+    engine.resize(WIDTH, HEIGHT);
+
     size_t keyframe_idx = 0;
     for (int i = 0; i < totalFrames; ++i) {
         float currentTime = static_cast<float>(i) / MOVIE_FPS;
+        
+        // Update orbital motion for this frame
+        updateOrbitalPositions(currentTime);
+        engine.updateSpheresSSBO();
 
         while (keyframe_idx + 1 < keys.size() && keys[keyframe_idx + 1].timeSec < currentTime) {
             keyframe_idx++;
@@ -652,22 +687,25 @@ void runMovieMode(Engine& engine) {
         name << exportDir << "/frame_" << setw(5) << setfill('0') << i << ".png";
         string file = name.str();
 
-        vector<float> gpu_pixels(WIDTH * HEIGHT * 4);
+        int w = engine.renderWidth;
+        int h = engine.renderHeight;
+
+        vector<float> gpu_pixels(w * h * 4);
         glBindTexture(GL_TEXTURE_2D, engine.texture);
         glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, gpu_pixels.data());
 
-        vector<unsigned char> png_pixels(WIDTH * HEIGHT * 3);
-        for(int y = 0; y < HEIGHT; ++y) {
-            for(int x = 0; x < WIDTH; ++x) {
-                int flipped_y = HEIGHT - 1 - y;
-                int gpu_idx = (y * WIDTH + x) * 4;
-                int png_idx = (flipped_y * WIDTH + x) * 3;
+        vector<unsigned char> png_pixels(w * h * 3);
+        for(int y = 0; y < h; ++y) {
+            for(int x = 0; x < w; ++x) {
+                int flipped_y = h - 1 - y;
+                int gpu_idx = (y * w + x) * 4;
+                int png_idx = (flipped_y * w + x) * 3;
                 png_pixels[png_idx + 0] = static_cast<unsigned char>(glm::clamp(gpu_pixels[gpu_idx + 0], 0.0f, 1.0f) * 255);
                 png_pixels[png_idx + 1] = static_cast<unsigned char>(glm::clamp(gpu_pixels[gpu_idx + 1], 0.0f, 1.0f) * 255);
                 png_pixels[png_idx + 2] = static_cast<unsigned char>(glm::clamp(gpu_pixels[gpu_idx + 2], 0.0f, 1.0f) * 255);
             }
         }
-        stbi_write_png(file.c_str(), WIDTH, HEIGHT, 3, png_pixels.data(), WIDTH * 3);
+        stbi_write_png(file.c_str(), w, h, 3, png_pixels.data(), w * 3);
         
         cout << "saved frame " << (i + 1) << "/" << totalFrames << "\r" << flush;
     }
@@ -699,6 +737,7 @@ int main(int argc, char** argv) {
     glfwSetMouseButtonCallback(engine.window, mouseButtonCallback);
     glfwSetCursorPosCallback(engine.window, cursorPosCallback);
     glfwSetScrollCallback(engine.window, scrollCallback);
+    glfwSetFramebufferSizeCallback(engine.window, framebufferSizeCallback);
     
     cout << "\nwormhole simulation\n\n";
 

@@ -44,3 +44,13 @@ add_custom_command(TARGET WormholeSim POST_BUILD
             $<TARGET_FILE_DIR:WormholeSim>
 )
 
+# Offline GR renderer with true geodesic integration
+add_executable(WormholeGR wormhole_gr_real.cpp)
+target_link_libraries(WormholeGR PRIVATE glm::glm)
+target_include_directories(WormholeGR PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(WormholeGR PRIVATE OpenMP::OpenMP_CXX)
+endif()
+
+
