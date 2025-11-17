@@ -41,10 +41,6 @@ const int WIDTH = 800;
 const int HEIGHT = 600;
 const int MOVIE_FPS = 24;
 
-const float THROAT_RADIUS = 25.0f;
-const vec3 THROAT_CENTER = vec3(0, 0, 0);
-const float BENDING_STRENGTH = 0.95f;
-
 int currentUniverse = 1;
 
 //------------------------------------------------------------------------------
@@ -386,6 +382,11 @@ struct Engine {
         glUniform3fv(glGetUniformLocation(computeShaderProgram, "sunColorU1"), 1, value_ptr(sunColorU1));
         glUniform3fv(glGetUniformLocation(computeShaderProgram, "sunColorU2"), 1, value_ptr(sunColorU2));
         glUniform1f(glGetUniformLocation(computeShaderProgram, "time"), (float)glfwGetTime());
+        
+        vec3 wormholeCenter = vec3(60.0f, 0.0f, -10.0f);
+        float wormholeRadius = 6.0f;
+        glUniform3fv(glGetUniformLocation(computeShaderProgram, "wormholeCenter"), 1, value_ptr(wormholeCenter));
+        glUniform1f(glGetUniformLocation(computeShaderProgram, "wormholeRadius"), wormholeRadius);
         
         glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
 

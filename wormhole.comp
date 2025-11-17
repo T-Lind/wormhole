@@ -40,9 +40,8 @@ uniform vec3 sunPosU2;
 uniform vec3 sunColorU1;
 uniform vec3 sunColorU2;
 uniform float time;
-
-const float THROAT_RADIUS = 15.0f;
-const vec3 THROAT_CENTER = vec3(0, 0, 0);
+uniform vec3 wormholeCenter;
+uniform float wormholeRadius;
 
 float random(vec2 st) {
     return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
@@ -156,7 +155,7 @@ void main() {
     float v = (1.0 - 2.0 * (pixel_coords.y + 0.5) / dims.y) * tanHalfFov;
     vec3 rayDir = normalize(u * right + v * up + forward);
 
-    Sphere throat_sphere = Sphere(vec4(THROAT_CENTER, THROAT_RADIUS), vec4(0), vec4(0, 0, 0, 0));
+    Sphere throat_sphere = Sphere(vec4(wormholeCenter, wormholeRadius), vec4(0), vec4(0, 0, 0, 0));
     HitInfo hitsThroat = intersectSphere(u_camera.position, rayDir, throat_sphere.centerAndRadius, throat_sphere.color, throat_sphere.properties);
 
     HitInfo sceneHit = traceScene(u_camera.position, rayDir, currentUniverse);
@@ -190,12 +189,12 @@ void main() {
     }
     else if (hitsThroat.hit) {
         vec3 P_in = u_camera.position + rayDir * hitsThroat.distance;
-        vec3 hit_normal = normalize(P_in - THROAT_CENTER);
+        vec3 hit_normal = normalize(P_in - wormholeCenter);
         
         float fresnel = pow(1.0 - abs(dot(rayDir, hit_normal)), 3.0);
         
         vec3 refracted_dir = refract(rayDir, hit_normal, 1.0 / 1.5);
-        vec3 new_origin = P_in - hit_normal * (THROAT_RADIUS * 2.0f) + refracted_dir * 0.1;
+        vec3 new_origin = P_in - hit_normal * (wormholeRadius * 2.0f) + refracted_dir * 0.1;
         
         int otherUniverse = (currentUniverse == 1) ? 2 : 1;
         HitInfo otherSceneHit = traceScene(new_origin, refracted_dir, otherUniverse);
