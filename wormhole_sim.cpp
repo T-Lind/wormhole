@@ -512,30 +512,55 @@ void runInteractiveMode(Engine& engine, const vector<Sphere>& initialSpheres) {
         processInput(engine.window);
 
         double time = glfwGetTime();
+        
+        // First pass: update all bodies orbiting suns (parentIndex == -1)
         for (size_t i = 0; i < spheres.size(); ++i) {
-            bool isEmissive = initialSpheres[i].properties.x > 0.5f;
-            if (!isEmissive) {
-                vec3 initialPos = vec3(initialSpheres[i].centerAndRadius);
-                
-                int universeID = int(initialSpheres[i].properties.y);
-                vec3 rotation_axis = (universeID == 1) ? vec3(0.0, 1.0, 0.0) : vec3(0.1, 1.0, 0.0);
-                float orbit_radius = length(vec3(initialPos.x, 0.0, initialPos.z));
-                float speed_factor = 150.0f;
-                float angular_velocity = 10.0f / (orbit_radius + speed_factor);
-                float angle = (float)time * angular_velocity;
-                
-                if (universeID == 2) {
-                    angle = -angle;
+            if (i >= orbits.size()) continue;
+            
+            const Orbit& orbit = orbits[i];
+            if (orbit.parentIndex != -1) continue;
+            
+            // Find parent (sun) position for this universe
+            vec3 parentPos = vec3(0.0f);
+            for (size_t j = 0; j < spheres.size(); ++j) {
+                bool isSun = spheres[j].properties.x > 0.5f;
+                int sunUniverse = int(spheres[j].properties.y);
+                if (isSun && sunUniverse == orbit.universe) {
+                    parentPos = vec3(spheres[j].centerAndRadius);
+                    break;
                 }
-
-                glm::mat4 rotation_matrix = glm::rotate(glm::mat4(1.0f), angle, normalize(rotation_axis));
-                vec3 new_pos = vec3(rotation_matrix * vec4(initialPos, 1.0f));
-                
-                spheres[i].centerAndRadius.x = new_pos.x;
-                spheres[i].centerAndRadius.y = new_pos.y;
-                spheres[i].centerAndRadius.z = new_pos.z;
             }
+            
+            // Calculate orbital position
+            float angle = radians(orbit.phaseDeg) + orbit.angularSpeed * (float)time;
+            mat4 inclinationMat = rotate(mat4(1.0f), radians(orbit.inclinationDeg), vec3(1.0f, 0.0f, 0.0f));
+            vec3 orbitPos = vec3(orbit.radius * cos(angle), 0.0f, orbit.radius * sin(angle));
+            orbitPos = vec3(inclinationMat * vec4(orbitPos, 1.0f));
+            
+            vec3 finalPos = parentPos + orbitPos;
+            spheres[i].centerAndRadius = vec4(finalPos, spheres[i].centerAndRadius.w);
         }
+        
+        // Second pass: update all moons (parentIndex >= 0)
+        for (size_t i = 0; i < spheres.size(); ++i) {
+            if (i >= orbits.size()) continue;
+            
+            const Orbit& orbit = orbits[i];
+            if (orbit.parentIndex < 0) continue;
+            
+            // Get parent planet position
+            vec3 parentPos = vec3(spheres[orbit.parentIndex].centerAndRadius);
+            
+            // Calculate orbital position
+            float angle = radians(orbit.phaseDeg) + orbit.angularSpeed * (float)time;
+            mat4 inclinationMat = rotate(mat4(1.0f), radians(orbit.inclinationDeg), vec3(1.0f, 0.0f, 0.0f));
+            vec3 orbitPos = vec3(orbit.radius * cos(angle), 0.0f, orbit.radius * sin(angle));
+            orbitPos = vec3(inclinationMat * vec4(orbitPos, 1.0f));
+            
+            vec3 finalPos = parentPos + orbitPos;
+            spheres[i].centerAndRadius = vec4(finalPos, spheres[i].centerAndRadius.w);
+        }
+        
         engine.updateSpheresSSBO();
 
         engine.render();
@@ -674,6 +699,29 @@ int main(int argc, char** argv) {
     spheres.push_back(Sphere(vec3(80, -40, 0), 18, vec3(1.0f, 0.2f, 1.0f), false, 2));
     spheres.push_back(Sphere(vec3(100, 0, 50), 18, vec3(0.2f, 1.0f, 1.0f), false, 2));
     spheres.push_back(Sphere(vec3(120, 0, 0), 22, vec3(1.0f, 1.0f, 1.0f), false, 2));
+    
+    // Initialize orbits parallel to spheres vector
+    // parentIndex: -1 = orbit around universe sun, >= 0 = orbit around spheres[parentIndex] (moon), < -1 = no orbit
+    orbits.clear();
+    orbits.reserve(spheres.size());
+
+    // Index 0: U1 sun (no orbit)
+    orbits.push_back({-2, 1, 0.0f, 0.0f, 0.0f, 0.0f});
+
+    // U1 planets (indices 1..4): orbit around U1 sun
+    orbits.push_back({-1, 1, 60.0f, 0.25f, 2.0f,  10.0f});   // idx 1: fast inner planet
+    orbits.push_back({-1, 1, 85.0f, 0.18f, 5.0f, 130.0f});   // idx 2: medium speed
+    orbits.push_back({-1, 1, 110.0f, 0.12f, 8.0f, 220.0f});  // idx 3: slower
+    orbits.push_back({-1, 1, 140.0f, 0.08f, 3.0f, 300.0f});  // idx 4: slowest outer planet
+
+    // Index 5: U2 sun (no orbit)
+    orbits.push_back({-2, 2, 0.0f, 0.0f, 0.0f, 0.0f});
+
+    // U2 planets (indices 6..9): orbit around U2 sun
+    orbits.push_back({-1, 2, 70.0f, 0.22f, 4.0f,  30.0f});   // idx 6
+    orbits.push_back({-1, 2, 100.0f, 0.15f, 6.0f, 160.0f});  // idx 7
+    orbits.push_back({-1, 2, 130.0f, 0.10f, 9.0f, 250.0f});  // idx 8
+    orbits.push_back({-1, 2, 170.0f, 0.06f, 5.0f, 330.0f});  // idx 9
     
     currentUniverse = 1;
     
