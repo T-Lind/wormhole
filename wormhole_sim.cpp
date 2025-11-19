@@ -8,6 +8,11 @@ extern "C" {
 }
 #endif
 
+
+
+
+
+
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -721,6 +726,10 @@ void runMovieMode(Engine& engine) {
         cout << "error: ffmpeg command failed. you can try running it manually:\n" << ffmpeg_cmd << "\n";
     }
 }
+
+
+
+
 
 int main(int argc, char** argv) {
     bool predefinedPath = false;

@@ -35,6 +35,10 @@ layout(std430, binding = 3) buffer StarBuffer {
     Star stars[];
 };
 
+
+
+
+
 uniform int currentUniverse;
 uniform int numSpheres;
 uniform int numStars;
@@ -150,6 +154,10 @@ vec3 getStarfieldColor(vec3 direction) {
     }
     return color;
 }
+
+
+
+
 
 void main() {
     // get x,y of compute thread idx
