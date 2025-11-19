@@ -1,8 +1,11 @@
 #version 430 core
+// work group size
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-
+// writeable image to unit 0
 layout(binding = 0, rgba32f) uniform writeonly image2D destTex;
 
+// assigns camera ubo
+// vec3 holds 12 bytes + + 4 pad
 layout(std140, binding = 0) uniform Camera {
     vec3 position;
     float pad1;
@@ -44,6 +47,7 @@ uniform vec3 wormholeCenter;
 uniform float wormholeRadius;
 
 float random(vec2 st) {
+    // hbpr
     return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
 }
 
@@ -54,11 +58,12 @@ float noise(vec2 st) {
     float b = random(i + vec2(1.0, 0.0));
     float c = random(i + vec2(0.0, 1.0));
     float d = random(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
+    vec2 u = f * f * (3.0 - 2.0 * f); // smooth interpolation b/w random sample
     return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.y * u.x;
 }
 
 float fbm(vec2 st) {
+    // fractal brownian motion
     float value = 0.0;
     float amplitude = 0.5;
     for (int i = 0; i < 6; i++) {
@@ -82,6 +87,11 @@ struct HitInfo {
 HitInfo intersectSphere(vec3 rayOrigin, vec3 rayDir, vec4 centerAndRadius, vec4 color, vec4 properties) {
     HitInfo hit;
     hit.hit = false;
+    // P(t) = O+tD
+    // ||(O+tD)-C||^2=R^2
+    // oc is from ray origin to center of sphere
+    // (O+tD-C)^2=(oc+tD)^2
+    // t^2(D*D)+2t(oc*D)+(oc*oc-R^2)=0
     vec3 oc = rayOrigin - centerAndRadius.xyz;
     float a = dot(rayDir, rayDir);
     float b = 2.0 * dot(oc, rayDir);
@@ -90,7 +100,7 @@ HitInfo intersectSphere(vec3 rayOrigin, vec3 rayDir, vec4 centerAndRadius, vec4 
 
     if (discriminant >= 0) {
         float t = (-b - sqrt(discriminant)) / (2.0 * a);
-        if (t > 0.001) {
+        if (t > 0.001) { // in front of camera
             hit.hit = true;
             hit.distance = t;
             hit.normal = normalize((rayOrigin + rayDir * t) - centerAndRadius.xyz);
@@ -104,13 +114,14 @@ HitInfo intersectSphere(vec3 rayOrigin, vec3 rayDir, vec4 centerAndRadius, vec4 
 }
 
 HitInfo traceScene(vec3 origin, vec3 direction, int universe) {
+    // trace hot path of shader
     HitInfo closestHit;
     closestHit.hit = false;
     closestHit.distance = 1e10;
 
     for (int i = 0; i < numSpheres; ++i) {
         Sphere sphere = spheres[i];
-        if (int(sphere.properties.y) == universe) {
+        if (int(sphere.properties.y) == universe) { //
             HitInfo currentHit = intersectSphere(origin, direction, sphere.centerAndRadius, sphere.color, sphere.properties);
             if (currentHit.hit && currentHit.distance < closestHit.distance) {
                 closestHit = currentHit;
@@ -122,12 +133,15 @@ HitInfo traceScene(vec3 origin, vec3 direction, int universe) {
 }
 
 vec3 getStarfieldColor(vec3 direction) {
+    // Find color contributed by background stars in a certain direction
     vec3 color = vec3(0.0);
 
     for(int i = 0; i < numStars; ++i) {
         vec3 star_dir = stars[i].data.xyz;
+        // cos theta = dot(dir_1, dir_2)
         float dist = acos(dot(direction, star_dir));
         
+        // give stars a twinkle, smooth it
         float intensity = stars[i].data.w * smoothstep(stars[i].colorAndSize.w, 0.0, dist);
         
         if (intensity > 0.0) {
@@ -138,15 +152,18 @@ vec3 getStarfieldColor(vec3 direction) {
 }
 
 void main() {
+    // get x,y of compute thread idx
     ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
     ivec2 dims = imageSize(destTex);
     if (pixel_coords.x >= dims.x || pixel_coords.y >= dims.y) {
         return;
     }
 
+    // camera basis vectors
     vec3 forward = normalize(u_camera.target - u_camera.position);
     vec3 right = normalize(cross(forward, u_camera.up));
     vec3 up = cross(right, forward);
+
     float aspect = float(dims.x) / float(dims.y);
     float tanHalfFov = tan(radians(u_camera.fov) * 0.5);
 
@@ -162,6 +179,7 @@ void main() {
     vec3 final_color;
 
     if (sceneHit.hit && (!hitsThroat.hit || sceneHit.distance < hitsThroat.distance)) {
+        // hit something, not wormhole. figure out if is sun or another body
         if (sceneHit.isEmissive == 1) {
             vec3 hitPoint = u_camera.position + rayDir * sceneHit.distance;
             vec3 localPos = hitPoint - sceneHit.center;
@@ -190,15 +208,20 @@ void main() {
         vec3 P_in = u_camera.position + rayDir * hitsThroat.distance;
         vec3 hit_normal = normalize(P_in - wormholeCenter);
         
+        // rim approximation
         float fresnel = pow(1.0 - abs(dot(rayDir, hit_normal)), 3.0);
-        
+        // compute refracted direction through surface
         vec3 refracted_dir = refract(rayDir, hit_normal, 1.0 / 1.5);
+        // teleport ray to the other side
         vec3 new_origin = P_in - hit_normal * (wormholeRadius * 2.0f) + refracted_dir * 0.1;
         
         int otherUniverse = (currentUniverse == 1) ? 2 : 1;
         HitInfo otherSceneHit = traceScene(new_origin, refracted_dir, otherUniverse);
+        // this traces the ray in the other universe
 
         vec3 remote_color;
+
+        // similar sort of thing, deal with a hit in the new universe.
         if (otherSceneHit.hit) {
             if (otherSceneHit.isEmissive == 1) {
                  vec3 hitPoint = new_origin + refracted_dir * otherSceneHit.distance;
@@ -222,10 +245,11 @@ void main() {
         } else {
             remote_color = getStarfieldColor(refracted_dir);
         }
-        
+        // give a bluish glass rim effect to the wormhole.
         final_color = mix(remote_color, vec3(0.5, 0.8, 1.0), fresnel * 0.8);
     }
     else {
+        // just gets starfield color given a ray dir
         final_color = getStarfieldColor(rayDir);
     }
 

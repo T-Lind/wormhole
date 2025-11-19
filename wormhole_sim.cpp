@@ -139,7 +139,7 @@ struct alignas(16) Star {
 
 struct Orbit {
     int parentIndex;      // -1: orbit around universe's sun at origin, >= 0: orbit around spheres[parentIndex] (moon)
-    int universe;         // 1 or 2
+    int universe;         // 1 or 2, ths determines universe of the object
     float radius;         // orbital radius from parent
     float angularSpeed;   // radians per second
     float inclinationDeg; // orbital plane tilt in degrees
@@ -174,8 +174,7 @@ void generateStars(int count) {
     }
 }
 
-// Helper functions to build solar systems while keeping spheres and orbits vectors aligned
-// Each function adds a Sphere and corresponding Orbit entry, returning the sphere's index
+// Helper fns, returns index of sun or planet
 
 // Add a sun at origin (0,0,0) for the given universe
 static int addSun(int universe, float radius, vec3 color) {
@@ -184,8 +183,7 @@ static int addSun(int universe, float radius, vec3 color) {
     return (int)spheres.size() - 1;
 }
 
-// Add a planet orbiting its universe's sun
-// Computes initial position at t=0 based on orbit parameters for visual placement
+// Add a planet orbiting its universe's sun, and computes an initial position
 static int addPlanet(int universe, float orbitRadius, float angularSpeed, 
                      float inclinationDeg, float phaseDeg, float radius, vec3 color) {
     float angle = radians(phaseDeg);
@@ -198,8 +196,7 @@ static int addPlanet(int universe, float orbitRadius, float angularSpeed,
     return (int)spheres.size() - 1;
 }
 
-// Add a moon orbiting the given parent planet
-// Computes initial position relative to parent based on orbit parameters
+// Add a moon orbiting the given parent planet, and comptes an initial position
 static int addMoon(int parentIndex, int universe, float orbitRadius, float angularSpeed,
                    float inclinationDeg, float phaseDeg, float radius, vec3 color) {
     vec3 parentPos = vec3(spheres[parentIndex].centerAndRadius);
@@ -270,7 +267,7 @@ struct Engine {
         cout << "opengl " << glGetString(GL_VERSION) << "\n";
     }
     
-    void initShaders() {
+    void initShaders() {  // glsl 3.30 core specified here
         const char* vertSrc = R"(
             #version 330 core
             layout(location = 0) in vec2 aPos;
@@ -741,8 +738,7 @@ int main(int argc, char** argv) {
     
     cout << "\nwormhole simulation\n\n";
 
-    // Build two compact solar systems using helper functions
-    // This keeps spheres and orbits vectors aligned automatically
+    // Build two compact solar systems using helper fns
     spheres.clear();
     orbits.clear();
     spheres.reserve(32);
@@ -772,9 +768,6 @@ int main(int argc, char** argv) {
     generateStars(1000);
     engine.uploadSceneData();
 
-    cout << "universe 1 has a yellow sun with 4 planets and 3 moons.\n";
-    cout << "universe 2 has a blue sun with 4 planets and 2 moons.\n";
-    
     if (predefinedPath) {
         runMovieMode(engine);
     } else {
